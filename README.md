@@ -1,27 +1,59 @@
 # ProofGate — Search finds candidates. ProofGate finds the one that actually fits.
 
-Locked workflow: `USER → API → requirements → SerpApi → complete candidates → LLM rank → Jev verify (#1, then fallback) → VERIFIED / NO VERIFIED MATCH`.
+Locked workflow: `USER → API → requirements → SerpApi → complete candidates → LLM rank → Jev verify (#1, then fallback) → VERIFIED / human-review best match`.
 
-Works for any constraint-heavy live-search task — hotels, laptops, flights, products — the SerpApi engine is auto-picked per request (`google_hotels` / `google_shopping` / `google_flights` / `google`, overridable per call).
+Works for any constraint-heavy live-search task — hotels, laptops, flights, restaurants, products — the SerpApi engine is auto-picked per request (`google_hotels` / `google_shopping` / `google_flights` / `google_maps` / `google`, overridable per call).
 
-## Setup (real keys required)
+## Run it locally (5 minutes)
 
-There is no demo/mock data anywhere in the product. Without credentials the
-pipeline fails loudly with a clear system error instead of a fake result.
+**1. Clone + backend deps** (Python 3.10+):
 
 ```bash
+git clone git@github.com:atharvb7/serpapi-hackthon.git
+cd serpapi-hackthon
 pip install -r requirements.txt
-cp .env.example .env   # set SERPAPI_API_KEY + LLM_API_KEY (required)
 ```
 
-## Use it
+**2. Add API keys** — copy the template and fill 3 keys:
+
+```bash
+cp .env.example .env
+```
+
+| Key | Where to get it | Required? |
+|---|---|---|
+| `SERPAPI_API_KEY` | [serpapi.com/dashboard](https://serpapi.com/dashboard) (free: 100 searches/month) | Yes |
+| `LLM_API_KEY` | [platform.openai.com/api-keys](https://platform.openai.com/api-keys) (any OpenAI-compatible key works via `LLM_BASE_URL`) | Yes |
+| `JEV_API_KEY` | [console.typesafe.ai/keys](https://console.typesafe.ai/keys) | Yes (official TypeSafe Jev adjudication) |
+
+`.env` is gitignored — keys never leave your machine.
+
+**3. Start the API** (http://localhost:8000):
+
+```bash
+python run.py --serve
+```
+
+Check `GET /health` → `"ready": true`. If a key is missing it tells you exactly which one.
+
+**4. Start the UI** (http://localhost:5173, new terminal):
+
+```bash
+cd frontend && npm install && npm run dev
+```
+
+That's it — ask anything that needs a verified answer and watch the search → rank → verify trace stream live.
+
+**Prefer the terminal?** Skip step 4 and run:
 
 ```bash
 python run.py "Find me the best hotel in Goa under Rs 10000 for 2 people, beachfront, breakfast included and free cancellation."
-python run.py --action buy_laptop "Find me a laptop under Rs 90000 with 32GB RAM, 1TB SSD, OLED, RTX 4060 and under 2kg."
-python run.py --serve   # API on :8000
-cd frontend && npm install && npm run dev  # UI on :5173, proxies /v1
 ```
+
+## Notes
+
+There is no demo/mock data anywhere. Without credentials the pipeline fails
+loudly with a clear system error instead of a fake result.
 
 ## API
 
