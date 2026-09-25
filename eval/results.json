@@ -1,0 +1,48 @@
+{
+  "rows": [
+    {
+      "case": "Find me a hotel in Goa under Rs 10000 for 2 people, beachfro",
+      "strategy": "serpapi_top",
+      "pick": "c1",
+      "gold_status": "UNVERIFIED",
+      "hard_violation": false,
+      "correct": false
+    },
+    {
+      "case": "Find me a hotel in Goa under Rs 10000 for 2 people, beachfro",
+      "strategy": "keyword",
+      "pick": "c1",
+      "gold_status": "UNVERIFIED",
+      "hard_violation": false,
+      "correct": false
+    },
+    {
+      "case": "Find me a laptop under Rs 90000 with 32GB RAM, 1TB SSD, OLED",
+      "strategy": "serpapi_top",
+      "pick": "c1",
+      "gold_status": "REJECTED",
+      "hard_violation": true,
+      "correct": false
+    },
+    {
+      "case": "Find me a laptop under Rs 90000 with 32GB RAM, 1TB SSD, OLED",
+      "strategy": "keyword",
+      "pick": "c1",
+      "gold_status": "REJECTED",
+      "hard_violation": true,
+      "correct": false
+    }
+  ],
+  "serpapi_top": {
+    "n": 2,
+    "top1_correct_rate": 0.0,
+    "hard_violation_rate": 0.5
+  },
+  "keyword": {
+    "n": 2,
+    "top1_correct_rate": 0.0,
+    "hard_violation_rate": 0.5
+  },
+  "note": "Offline gold-label comparison for ranking baselines. Strategies C (direct LLM) and D (ProofGate) must be measured live via POST /v1/find-and-verify on the same cases; see eval/README.",
+  "elapsed_ms": 0
+}
