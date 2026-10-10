@@ -7,7 +7,7 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "preview": "vite preview",
-    "test": "node --test src/traceEvents.test.ts src/booking.test.ts"
+    "test": "node --test src/traceEvents.test.ts src/booking.test.ts src/appTests.test.ts"
   },
   "dependencies": {
     "@react-three/drei": "^9.122.0",

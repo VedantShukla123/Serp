@@ -57,3 +57,39 @@ export function normReq(r: unknown, i: number): ReqItem {
 export function verdictForCandidate<V extends { candidate_id: string }>(verdicts: V[], id: string): V | undefined {
   return verdicts.find((v) => v.candidate_id === id)
 }
+
+/* ---------- Playground pipeline: stage state derived ONLY from received events ---------- */
+export type StageId = 'understand' | 'search' | 'rank' | 'verify' | 'decide'
+export type StageState = 'idle' | 'active' | 'done' | 'skipped' | 'error'
+type TraceLike = {
+  requirements: unknown[]; candidateCount: number | null; ranked: unknown[]
+  verifying: unknown | null; verdicts: unknown[]; final: { status: string } | null; error: string | null
+}
+
+export const STAGES: { id: StageId; label: string; detail: string }[] = [
+  { id: 'understand', label: 'Requirements', detail: 'LLM parses hard constraints' },
+  { id: 'search', label: 'Search', detail: 'SerpApi live candidates' },
+  { id: 'rank', label: 'Rank', detail: 'LLM orders by relevance' },
+  { id: 'verify', label: 'Jev verify', detail: 'Per-requirement verdicts' },
+  { id: 'decide', label: 'Decision', detail: 'Verified · review · rejected' },
+]
+
+/** Stage states for a run. `live` = the request is still streaming. */
+export function pipelineStages(t: TraceLike | null, live: boolean): Record<StageId, StageState> {
+  const out: Record<StageId, StageState> = { understand: 'idle', search: 'idle', rank: 'idle', verify: 'idle', decide: 'idle' }
+  if (!t) return out
+  const done: Record<StageId, boolean> = {
+    understand: t.requirements.length > 0,
+    search: t.candidateCount !== null,
+    rank: t.ranked.length > 0,
+    verify: t.verdicts.length > 0 && (t.final !== null || (!live && !t.verifying)),
+    decide: t.final !== null,
+  }
+  let frontier = true
+  for (const s of STAGES) {
+    if (done[s.id]) { out[s.id] = 'done'; continue }
+    if (t.final) { out[s.id] = 'skipped'; continue }
+    if (frontier && (live || t.error)) { out[s.id] = t.error ? 'error' : 'active'; frontier = false }
+  }
+  return out
+}
