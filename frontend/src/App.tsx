@@ -1,14 +1,13 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import roboUrl from './assets/robo.png'
 import RoboViewer from './RoboViewer'
-import { isCandidateVerdict, rankedFromEvent, rankReasonFor, type RankedItem } from './traceEvents'
+import { isCandidateVerdict, normReq, rankedFromEvent, rankReasonFor, verdictForCandidate, type RankedItem, type ReqItem } from './traceEvents'
 
 /* ------------------------------------------------------------------ */
 /* Contract types (POST /v1/agent/chat + SSE /v1/agent/chat/stream)    */
 /* Backend is concurrently adding these; UI develops against contract */
 /* ------------------------------------------------------------------ */
 
-type ReqItem = { id: string; description: string }
 type CandItem = {
   candidate_id?: string; id?: string
   name?: string; candidate_name?: string; title?: string
@@ -92,17 +91,6 @@ function candUrl(c: CandItem): string | null {
 function fmtVal(v: string | number | null | undefined): string | null {
   if (v === null || v === undefined || v === '') return null
   return String(v)
-}
-function normReq(r: unknown, i: number): ReqItem {
-  if (typeof r === 'string') return { id: `R${i + 1}`, description: r }
-  if (r && typeof r === 'object') {
-    const o = r as Record<string, unknown>
-    return {
-      id: String(o.id ?? o.requirement_id ?? `R${i + 1}`),
-      description: String(o.description ?? o.requirement ?? o.text ?? JSON.stringify(r)),
-    }
-  }
-  return { id: `R${i + 1}`, description: String(r) }
 }
 
 function verdictClass(s: string): 'ok' | 'bad' | 'warn' {
@@ -525,7 +513,7 @@ function TraceView({ trace, msgId, patchTrace }: {
     (trace.candidateCount ?? null) !== null || trace.ranked.length > 0 ||
     trace.verdicts.length > 0 || trace.final || trace.error
   if (!hasAnything && !trace.statusLine) return null
-  const verdictFor = (id: string) => trace.verdicts.find((v) => v.candidate_id === id)
+  const verdictFor = (id: string) => verdictForCandidate(trace.verdicts, id)
 
   return (
     <div className="trace">

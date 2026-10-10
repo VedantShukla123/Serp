@@ -2,6 +2,7 @@
    with `node --test`. Backend contract: app/services/pipeline.py _emit calls. */
 
 export type RankedItem = { candidate_id?: string; id?: string; rank?: number; reason?: string; name?: string }
+export type ReqItem = { id: string; description: string }
 type NamedCand = { candidate_id?: string; id?: string; name?: string; candidate_name?: string; title?: string }
 
 /** `ranking` event: backend sends `ranked_candidates` ({candidate_id, rank, reason}).
@@ -37,4 +38,22 @@ export function rankReasonFor(overallStatus: string | undefined): string {
  *  Only the per-candidate shape belongs in the trace as a candidate row. */
 export function isCandidateVerdict(p: Record<string, unknown>): boolean {
   return typeof p.candidate_id === 'string' && p.candidate_id !== ''
+}
+
+/** `requirements` event item -> chip. Renders exactly what the backend parser produced. */
+export function normReq(r: unknown, i: number): ReqItem {
+  if (typeof r === 'string') return { id: `R${i + 1}`, description: r }
+  if (r && typeof r === 'object') {
+    const o = r as Record<string, unknown>
+    return {
+      id: String(o.id ?? o.requirement_id ?? `R${i + 1}`),
+      description: String(o.description ?? o.requirement ?? o.text ?? JSON.stringify(r)),
+    }
+  }
+  return { id: `R${i + 1}`, description: String(r) }
+}
+
+/** Verdict for a candidate, matched by candidate_id (never by array position or rank). */
+export function verdictForCandidate<V extends { candidate_id: string }>(verdicts: V[], id: string): V | undefined {
+  return verdicts.find((v) => v.candidate_id === id)
 }

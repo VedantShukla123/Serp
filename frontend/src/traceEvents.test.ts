@@ -2,7 +2,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 
-import { isCandidateVerdict, rankedFromEvent, rankReasonFor } from './traceEvents.ts'
+import { isCandidateVerdict, normReq, rankedFromEvent, rankReasonFor, verdictForCandidate } from './traceEvents.ts'
 
 test('ranking event reads the backend `ranked_candidates` field and attaches names', () => {
   // Shape emitted by app/services/pipeline.py: {"type": "ranking", "ranked_candidates": [...], "model": ...}
@@ -49,4 +49,48 @@ test('unverified and rejected candidates never display an all-requirements-met c
   for (const s of ['UNVERIFIED', 'REJECTED', undefined]) {
     assert.doesNotMatch(rankReasonFor(s), /meets all|all required points verified|beachfront|breakfast|cancellation/i)
   }
+})
+
+// `requirements` event captured from stored run c28bb2b65036 ("...for 2 people...").
+const FIVE_REQS_EVENT = {
+  type: 'requirements',
+  requirements: [
+    { id: 'budget', description: 'Total price must be <= Rs 10,000', type: 'numeric', importance: 'required' },
+    { id: 'guests', description: 'Must sleep at least 2 guests', type: 'capacity', importance: 'required' },
+    { id: 'beachfront', description: 'Must be beachfront', type: 'semantic', importance: 'required' },
+    { id: 'breakfast_included', description: 'Must include breakfast', type: 'inclusion', importance: 'required' },
+    { id: 'free_cancellation', description: 'Must offer free cancellation', type: 'policy', importance: 'required' },
+  ],
+}
+
+test('all five parsed requirements, including the two-guest constraint, become chips', () => {
+  const chips = FIVE_REQS_EVENT.requirements.map(normReq)
+  assert.deepEqual(chips.map((c) => c.id), ['budget', 'guests', 'beachfront', 'breakfast_included', 'free_cancellation'])
+  assert.deepEqual(chips[1], { id: 'guests', description: 'Must sleep at least 2 guests' })
+})
+
+test('shortlist status is matched by candidate_id when ranking and verification orders differ', () => {
+  // ranking order: c12, c3, c1, c7, c99 ; verdicts arrive in a different order; c99 never checked
+  const ranked = rankedFromEvent({ ranked_candidates: [
+    { candidate_id: 'c12', rank: 1 }, { candidate_id: 'c3', rank: 2 }, { candidate_id: 'c1', rank: 3 },
+    { candidate_id: 'c7', rank: 4 }, { candidate_id: 'c99', rank: 5 },
+  ] }, [])
+  const verdicts = [
+    { candidate_id: 'c3', overall_status: 'UNVERIFIED' },
+    { candidate_id: 'c7', overall_status: 'VERIFIED' },
+    { candidate_id: 'c1', overall_status: 'REJECTED' },
+    { candidate_id: 'c12', overall_status: 'REJECTED' },
+  ]
+  const shown = ranked.map((r) => [r.candidate_id, rankReasonFor(verdictForCandidate(verdicts, r.candidate_id!)?.overall_status)])
+  assert.deepEqual(shown, [
+    ['c12', rankReasonFor('REJECTED')],
+    ['c3', rankReasonFor('UNVERIFIED')],
+    ['c1', rankReasonFor('REJECTED')],
+    ['c7', rankReasonFor('VERIFIED')],
+    ['c99', rankReasonFor(undefined)],
+  ])
+})
+
+test('verdict lookup never falls back to position', () => {
+  assert.equal(verdictForCandidate([{ candidate_id: 'c2', overall_status: 'VERIFIED' }], 'c1'), undefined)
 })

@@ -18,6 +18,7 @@ from app.config import Settings
 from app.main import app
 from app.mcp import adapter
 from app.models.schemas import (
+    AttemptRecord,
     Candidate,
     ParsedRequest,
     RankedCandidate,
@@ -148,3 +149,72 @@ def test_runs_stored_before_fix_are_relabelled_on_read(settings: Settings) -> No
     _assert_status_reasons(api.json()["ranked_candidates"])
     assert RAW not in api.text
     _assert_status_reasons(adapter.get_run("legacy1")["ranked_candidates"])
+
+
+# Requirements as stored in run c28bb2b65036 ("...for 2 people...").
+FIVE_REQS = [
+    Requirement(id="budget", description="Total price must be <= Rs 10,000", type="numeric"),
+    Requirement(id="guests", description="Must sleep at least 2 guests", type="capacity"),
+    Requirement(id="beachfront", description="Must be beachfront", type="semantic"),
+    Requirement(id="breakfast_included", description="Must include breakfast", type="inclusion"),
+    Requirement(id="free_cancellation", description="Must offer free cancellation", type="policy"),
+]
+FIVE_IDS = [r.id for r in FIVE_REQS]
+
+
+def test_all_five_requirements_reach_event_jev_and_api(settings: Settings, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(pipeline.requirement_parser, "parse_requirements",
+                        lambda req, st: ParsedRequest(request=req, requirements=FIVE_REQS))
+    seen_by_jev: list[list[str]] = []
+
+    def fake_verify(requirements, c, st):
+        seen_by_jev.append([r.id for r in requirements])
+        return VerificationResult(candidate_id=c.candidate_id, overall_status="UNVERIFIED", requirements=[
+            RequirementVerdict(requirement_id=r.id, status="UNKNOWN" if r.id == "guests" else "SATISFIED")
+            for r in requirements])
+
+    monkeypatch.setattr(pipeline.jev_verifier, "verify_candidate", fake_verify)
+    events: list[dict] = []
+    rec = pipeline.run_find_and_verify("goa for 2 people", "book_hotel", settings, on_event=events.append)
+
+    req_event = next(e for e in events if e["type"] == "requirements")
+    assert [r["id"] for r in req_event["requirements"]] == FIVE_IDS
+    assert req_event["requirements"][1]["description"] == "Must sleep at least 2 guests"
+    assert seen_by_jev and all(ids == FIVE_IDS for ids in seen_by_jev)
+    assert [v.requirement_id for v in rec.attempts[0].verification.requirements] == FIVE_IDS
+
+    body = TestClient(app).post("/v1/find-and-verify", json={"request": "goa for 2 people"}).json()
+    assert [r["id"] for r in body["requirements"]] == FIVE_IDS
+    assert [r["id"] for r in TestClient(app).get(f"/v1/runs/{body['run_id']}").json()["requirements"]] == FIVE_IDS
+
+
+def test_reasons_follow_candidate_id_when_orders_differ(settings: Settings, monkeypatch: pytest.MonkeyPatch) -> None:
+    """SerpApi order c1..c4, ranker order c4,c2,c1,c3; c1 VERIFIED stops before c3."""
+    table = {"c4": "UNVERIFIED", "c2": "REJECTED", "c1": "VERIFIED"}
+    monkeypatch.setattr(pipeline.llm_matcher, "rank_candidates", lambda *a, **k: (RankingResult(ranked_candidates=[
+        RankedCandidate(candidate_id=cid, rank=i + 1, reason=f"{cid} {RAW}")
+        for i, cid in enumerate(["c4", "c2", "c1", "c3"])]), {}))
+    monkeypatch.setattr(pipeline.jev_verifier, "verify_candidate", lambda reqs, c, st: VerificationResult(
+        candidate_id=c.candidate_id, overall_status=table[c.candidate_id], requirements=[]))
+    rec = pipeline.run_find_and_verify("goa", "book_hotel", settings)
+
+    assert [a.candidate_id for a in rec.attempts] == ["c4", "c2", "c1"]
+    assert [(rc.candidate_id, rc.rank, rc.reason) for rc in rec.ranked_candidates] == [
+        ("c4", 1, UNVERIFIED_TEXT), ("c2", 2, REJECTED_TEXT), ("c1", 3, VERIFIED_TEXT), ("c3", 4, UNCHECKED_TEXT)]
+    stored = TestClient(app).get(f"/v1/runs/{rec.run_id}").json()["ranked_candidates"]
+    assert [(rc["candidate_id"], rc["reason"]) for rc in stored] == [
+        ("c4", UNVERIFIED_TEXT), ("c2", REJECTED_TEXT), ("c1", VERIFIED_TEXT), ("c3", UNCHECKED_TEXT)]
+
+
+def test_relabel_matches_by_id_not_position() -> None:
+    ranked = [RankedCandidate(candidate_id=c, rank=i + 1, reason=RAW) for i, c in enumerate(["c12", "c3", "c7"])]
+    attempts = [  # deliberately a different order from the ranking
+        AttemptRecord(candidate_id="c7", verification=VerificationResult(candidate_id="c7", overall_status="VERIFIED", requirements=[])),
+        AttemptRecord(candidate_id="c12", verification=VerificationResult(candidate_id="c12", overall_status="REJECTED", requirements=[])),
+    ]
+    assert [(rc.candidate_id, rc.reason) for rc in rank_reasons.relabel(ranked, attempts)] == [
+        ("c12", REJECTED_TEXT), ("c3", UNCHECKED_TEXT), ("c7", VERIFIED_TEXT)]
+    data = {"ranked_candidates": [rc.model_dump() for rc in ranked],
+            "attempts": [a.model_dump() for a in attempts]}
+    assert [rc["reason"] for rc in rank_reasons.relabel_run_dict(data)["ranked_candidates"]] == [
+        REJECTED_TEXT, UNCHECKED_TEXT, VERIFIED_TEXT]
