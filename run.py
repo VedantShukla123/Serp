@@ -9,6 +9,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 
 from app.config import load_settings
@@ -63,12 +64,16 @@ def main() -> int:
     ap.add_argument("--action", default="search")
     ap.add_argument("--max-candidates", type=int, default=10)
     ap.add_argument("--serve", action="store_true", help="start API server instead")
-    ap.add_argument("--port", type=int, default=8000)
+    ap.add_argument("--host", default=os.environ.get("PROOFGATE_HOST", "127.0.0.1"),
+                    help="bind address (env PROOFGATE_HOST; default 127.0.0.1 = this machine only)")
+    ap.add_argument("--port", type=int, default=int(os.environ.get("PORT") or os.environ.get("PROOFGATE_PORT") or 8000),
+                    help="port (env PORT or PROOFGATE_PORT; default 8000)")
     args = ap.parse_args()
 
     if args.serve:
         import uvicorn
-        uvicorn.run("app.main:app", host="0.0.0.0", port=args.port, reload=True)
+        reload = os.environ.get("PROOFGATE_RELOAD", "1") != "0"   # set PROOFGATE_RELOAD=0 when deploying
+        uvicorn.run("app.main:app", host=args.host, port=args.port, reload=reload)
         return 0
 
     if not args.request:

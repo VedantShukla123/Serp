@@ -2,6 +2,7 @@
    Extracted unchanged from App.tsx so the Assistant and the Playground drive the
    SAME real backend stream (GET /v1/agent/chat/stream, POST /v1/agent/chat). */
 import { useCallback, useRef, useState } from 'react'
+import { apiUrl } from './devhub'
 import { traceFromRun, type StoredRun } from './replay'
 import { isCandidateVerdict, normReq, rankedFromEvent, type RankedItem, type ReqItem } from './traceEvents'
 
@@ -33,6 +34,8 @@ export type TraceState = {
     selected_candidate: CandItem | null
     verification: { overall_status: string; requirements: VerdictReq[] } | null
     run_id: string | null
+    /** hotel | product | place | generic (from the search engine); null if unknown */
+    target_type?: string | null
   } | null
   error: string | null
 }
@@ -73,7 +76,7 @@ type StreamHandlers = { onEvent: (type: string, payload: Record<string, unknown>
 async function streamAgentChat(message: string, sessionId: string | null, h: StreamHandlers, signal: AbortSignal): Promise<void> {
   const qs = new URLSearchParams({ message })
   if (sessionId) qs.set('session_id', sessionId)
-  const res = await fetch(`/v1/agent/chat/stream?${qs.toString()}`, { headers: { Accept: 'text/event-stream' }, signal })
+  const res = await fetch(apiUrl(`/v1/agent/chat/stream?${qs.toString()}`), { headers: { Accept: 'text/event-stream' }, signal })
   if (!res.ok || !res.body) throw new Error(`stream_unavailable: HTTP ${res.status}`)
   const reader = res.body.getReader()
   const decoder = new TextDecoder()
@@ -178,7 +181,7 @@ export function useAgentChat(sessionKey: string) {
         const ver = (p.verification ?? null) as TraceState['final'] extends { verification: infer V } ? V : never
         patchTrace(msgId, (t) => ({
           ...t, verifying: null, statusLine: '',
-          final: { status: str(p.status || 'done'), selected_candidate: sel, verification: ver, run_id: str(p.run_id) || null },
+          final: { status: str(p.status || 'done'), selected_candidate: sel, verification: ver, run_id: str(p.run_id) || null, target_type: str(p.target_type) || null },
         }))
         setAgentText(msgId, str(p.reply) || 'Done — see the verification trace below.', { live: false, runId: str(p.run_id) || null })
         break
@@ -198,7 +201,7 @@ export function useAgentChat(sessionKey: string) {
   async function runPostFallback(msgId: string, message: string) {
     const body: Record<string, string> = { message }
     if (sessionRef.current) body.session_id = sessionRef.current
-    const res = await fetch('/v1/agent/chat', {
+    const res = await fetch(apiUrl('/v1/agent/chat'), {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body), signal: abortRef.current?.signal,
     })
@@ -239,7 +242,7 @@ export function useAgentChat(sessionKey: string) {
     const sel = (j.selected_candidate ?? null) as CandItem | null
     patchTrace(msgId, (t) => ({
       ...t, statusLine: '',
-      final: { status: String(j.status || 'done'), selected_candidate: sel, verification: (j.verification ?? null) as TraceState['final'] extends { verification: infer V } ? V : never, run_id: j.run_id ? String(j.run_id) : null },
+      final: { status: String(j.status || 'done'), selected_candidate: sel, verification: (j.verification ?? null) as TraceState['final'] extends { verification: infer V } ? V : never, run_id: j.run_id ? String(j.run_id) : null, target_type: j.target_type ? String(j.target_type) : null },
     }))
     setAgentText(msgId, String(j.reply || 'Done — see the verification trace below.'), { live: false, runId: j.run_id ? String(j.run_id) : null })
   }

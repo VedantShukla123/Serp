@@ -9,6 +9,15 @@ from dotenv import load_dotenv
 load_dotenv()
 
 
+DEV_ORIGINS = "http://localhost:5173,http://127.0.0.1:5173,http://localhost:4173,http://127.0.0.1:4173"
+
+
+def parse_origins(raw: str) -> tuple[str, ...]:
+    """Comma-separated origins for CORS. '*' allows any origin (not recommended outside local dev)."""
+    items = tuple(o.strip().rstrip("/") for o in raw.split(",") if o.strip())
+    return ("*",) if "*" in items else items
+
+
 def _get(name: str, default: str = "") -> str:
     v = os.getenv(name, default)
     return v.strip()
@@ -28,8 +37,9 @@ class Settings:
     jev_satisfied_at: float = 0.75
     jev_contradicted_below: float = 0.25
     jev_timeout_s: int = 60
-    proofgate_api_key: str = ""
+    proofgate_api_key: str = ""   # read but NOT enforced by any route (see DEPLOYMENT.md)
     db_path: str = "./proofgate.db"
+    allowed_origins: tuple[str, ...] = parse_origins(DEV_ORIGINS)
 
     @property
     def has_serpapi(self) -> bool:
@@ -76,6 +86,7 @@ def load_settings() -> Settings:
         jev_timeout_s=jev_timeout,
         proofgate_api_key=_get("PROOFGATE_API_KEY"),
         db_path=_get("PROOFGATE_DB_PATH", "./proofgate.db"),
+        allowed_origins=parse_origins(_get("PROOFGATE_ALLOWED_ORIGINS", DEV_ORIGINS)),
     )
 
 

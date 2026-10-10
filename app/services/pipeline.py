@@ -9,7 +9,7 @@ from collections.abc import Callable
 
 from app.config import Settings
 from app.models.schemas import Candidate, RunRecord
-from app.services import decision_engine, jev_verifier, llm_matcher, rank_reasons, requirement_parser, serpapi_service
+from app.services import actions, decision_engine, jev_verifier, llm_matcher, rank_reasons, requirement_parser, serpapi_service
 from app.storage import store
 
 
@@ -66,8 +66,10 @@ def run_find_and_verify(
                            "price": c.price, "price_value": c.price_value,
                            "rating": c.rating, "seller": c.seller} for c in candidates]})
 
+    target_type = actions.target_type(serp_meta.get("engine") if isinstance(serp_meta, dict) else None, action)
+
     if not candidates:
-        rec = RunRecord(run_id=run_id, status="no_verified_match", request=request, action=action,
+        rec = RunRecord(run_id=run_id, status="no_verified_match", request=request, action=action, target_type=target_type,
                         requirements=requirements, candidate_count=0, candidates=[],
                         serpapi_meta=serp_meta, timing_ms=timing, errors=errors + ["no_candidates"],
                         mocked=False, created_at=created_at, raw_serpapi=raw)
@@ -128,7 +130,7 @@ def run_find_and_verify(
 
     rec = RunRecord(
         run_id=run_id, status=status,  # type: ignore[arg-type]
-        request=request, action=action, requirements=requirements,
+        request=request, action=action, target_type=target_type, requirements=requirements,
         candidate_count=len(candidates), candidates=candidates,
         ranked_candidates=rank_reasons.relabel(ranking.ranked_candidates, attempts),
         selected_candidate=selected, verification=verification, attempts=attempts,

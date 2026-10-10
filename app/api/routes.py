@@ -13,9 +13,10 @@ from app.models.schemas import (
     Candidate,
     FindAndVerifyRequest,
     FindAndVerifyResponse,
+    OrderRequest,
     VerifyRequest,
 )
-from app.services import booking, jev_verifier, rank_reasons
+from app.services import actions, booking, jev_verifier, orders, rank_reasons
 from app.services.agent import run_agent_turn, sse_turn
 from app.services.pipeline import run_find_and_verify
 from app.storage import store
@@ -53,7 +54,9 @@ def get_run(run_id: str):
     data = store.get_run(settings.db_path, run_id)
     if data is None:
         raise HTTPException(status_code=404, detail="run not found")
-    return rank_reasons.relabel_run_dict(data)
+    data = rank_reasons.relabel_run_dict(data)
+    data["target_type"] = actions.run_target_type(data)   # derived for runs stored before the field existed
+    return data
 
 
 @router.get("/runs/{run_id}/evidence")
@@ -149,4 +152,57 @@ def booking_get(booking_id: str):
     data = store.get_booking(settings.db_path, booking_id)
     if data is None:
         raise HTTPException(status_code=404, detail={"code": "booking_not_found", "message": "booking not found", "errors": {}})
+    return data
+
+
+# ---- Action dispatch: which simulation (if any) fits this candidate ----
+
+@router.get("/runs/{run_id}/candidates/{candidate_id}/action-context")
+def action_context(run_id: str, candidate_id: str):
+    """Classifies the candidate by the engine that produced it and returns the
+    matching context. Never defaults to a hotel booking."""
+    run = _stored_run(run_id)
+    try:
+        cand = booking._find_candidate(run, candidate_id)
+        kind = actions.candidate_target_type(run, cand)
+        base = {"target_type": kind, "action": actions.ACTIONS[kind]}
+        if kind == "hotel":
+            return {**base, **booking.booking_context(run, candidate_id)}
+        if kind == "product":
+            return {**base, **orders.order_context(run, candidate_id)}
+        return {
+            **base, "run_id": run.get("run_id"), "candidate_id": candidate_id,
+            "item": {"name": cand.get("name") or cand.get("title") or None,
+                     "source_url": cand.get("source_url") or None,
+                     "engine": cand.get("engine") or actions.run_engine(run)},
+            **booking.verification_summary(run, candidate_id),
+            "message": "ProofGate has no simulated action for this kind of result yet — review only.",
+        }
+    except booking.BookingError as e:
+        raise HTTPException(status_code=e.status, detail=e.detail())
+
+
+# ---- Simulated product orders (demo only: no purchase, no payment) ----
+
+@router.post("/orders/preview")
+def order_preview(body: OrderRequest):
+    try:
+        return orders.preview_order(_stored_run(body.run_id), body)
+    except booking.BookingError as e:
+        raise HTTPException(status_code=e.status, detail=e.detail())
+
+
+@router.post("/orders")
+def order_create(body: OrderRequest):
+    try:
+        return orders.create_order(settings.db_path, _stored_run(body.run_id), body)
+    except booking.BookingError as e:
+        raise HTTPException(status_code=e.status, detail=e.detail())
+
+
+@router.get("/orders/{order_id}")
+def order_get(order_id: str):
+    data = store.get_order(settings.db_path, order_id)
+    if data is None:
+        raise HTTPException(status_code=404, detail={"code": "order_not_found", "message": "order not found", "errors": {}})
     return data

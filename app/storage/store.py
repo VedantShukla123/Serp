@@ -143,3 +143,39 @@ def get_booking(db_path: str, booking_id: str) -> dict | None:
     with _lock, _connect(db_path) as conn:
         row = conn.execute("SELECT data FROM bookings WHERE booking_id = ?", (booking_id,)).fetchone()
         return None if row is None else json.loads(row["data"])
+
+
+# ---- Simulated product orders (append-only; demo records, never real purchases) ----
+
+def init_orders(db_path: str) -> None:
+    with _lock, _connect(db_path) as conn:
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS orders (
+                order_id TEXT PRIMARY KEY,
+                created_at TEXT NOT NULL,
+                run_id TEXT NOT NULL,
+                candidate_id TEXT NOT NULL,
+                data TEXT NOT NULL
+            )
+            """
+        )
+        conn.commit()
+
+
+def save_order(db_path: str, order: dict) -> None:
+    init_orders(db_path)
+    with _lock, _connect(db_path) as conn:
+        conn.execute(
+            "INSERT INTO orders (order_id, created_at, run_id, candidate_id, data) VALUES (?, ?, ?, ?, ?)",
+            (order["order_id"], order["created_at"], order["run_id"],
+             order["candidate_id"], json.dumps(order, default=str)),
+        )
+        conn.commit()
+
+
+def get_order(db_path: str, order_id: str) -> dict | None:
+    init_orders(db_path)
+    with _lock, _connect(db_path) as conn:
+        row = conn.execute("SELECT data FROM orders WHERE order_id = ?", (order_id,)).fetchone()
+        return None if row is None else json.loads(row["data"])

@@ -109,6 +109,44 @@ Session behavior: every reply carries a `session_id`. Pass it back on the
 next turn to continue the conversation (history + follow-ups resolve against
 it); omit it to start a fresh session.
 
+## MCP server (stdio)
+
+ProofGate includes a Model Context Protocol server built on the official MCP Python
+SDK (`mcp` 2.x). MCP hosts launch it over **stdio**; it exposes four tools that call
+the same pipeline and store as the REST API:
+
+| Tool | What it does | Cost |
+|---|---|---|
+| `find_and_verify` | Live search + Jev verification; returns run_id, decision, per-candidate status | Uses API credits |
+| `verify_candidate` | Jev verdicts for one candidate you supply | Uses API credits |
+| `get_run` | A stored run (read-only, raw SerpApi omitted) | Free |
+| `get_evidence` | Stored candidates + Jev attempts (raw SerpApi optional) | Free |
+
+```bash
+pip install -r requirements.txt     # installs mcp>=2.3,<3
+python run_mcp.py --check           # prints "ProofGate MCP server OK - 4 tools"
+```
+
+Host configuration (replace the path; on Windows use `.venv\\Scripts\\python.exe`
+and double every backslash in JSON):
+
+```json
+{
+  "mcpServers": {
+    "proofgate": {
+      "command": "/ABSOLUTE/PATH/TO/serpapi-hackthon/.venv/bin/python",
+      "args": ["/ABSOLUTE/PATH/TO/serpapi-hackthon/run_mcp.py"]
+    }
+  }
+}
+```
+
+No secrets go in the host config: `run_mcp.py` anchors itself to the repository, so
+the repo's `.env` and `proofgate.db` are used from any working directory. stdout
+carries only MCP messages; logs go to stderr. Failures (unknown run, missing keys,
+upstream errors) are returned as MCP tool errors, never as verification results.
+Protocol tests: `python -m pytest tests/test_mcp_server.py`.
+
 ## SerpApi hackathon
 
 What to demo: ask anything ("laptop under Rs 90000 with 32GB RAM and OLED",

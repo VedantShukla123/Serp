@@ -22,6 +22,7 @@ from datetime import date, datetime, timezone
 from typing import Any
 
 from app.models.schemas import BookingRequest
+from app.services.actions import candidate_target_type
 from app.storage import store
 
 DISCLAIMER = "SIMULATED BOOKING — NO REAL RESERVATION CREATED — NO PAYMENT CHARGED"
@@ -88,9 +89,8 @@ def _attempt(run: dict, candidate_id: str) -> dict | None:
     return None
 
 
-def booking_context(run: dict, candidate_id: str) -> dict:
-    """Everything the booking form/review needs, resolved from the stored run."""
-    cand = _find_candidate(run, candidate_id)
+def verification_summary(run: dict, candidate_id: str) -> dict:
+    """Jev status + open points for one candidate (shared by every action type)."""
     attempt = _attempt(run, candidate_id)
     verification = (attempt or {}).get("verification") or {}
     status = verification.get("overall_status") or NOT_CHECKED
@@ -107,8 +107,26 @@ def booking_context(run: dict, candidate_id: str) -> dict:
         unresolved = [{"requirement_id": rid, "description": d, "status": "NOT_CHECKED"}
                       for rid, d in descriptions.items()]
     return {
+        "verification_status": status,
+        "unresolved_requirements": unresolved,
+        "contradicted_requirements": _with("CONTRADICTED"),
+        "requires_acknowledgement": status != "VERIFIED",
+    }
+
+
+def booking_context(run: dict, candidate_id: str) -> dict:
+    """Everything the booking form/review needs, resolved from the stored run."""
+    cand = _find_candidate(run, candidate_id)
+    kind = candidate_target_type(run, cand)
+    if kind != "hotel":
+        raise BookingError(409, "wrong_action_type",
+                           f"Candidate {candidate_id} is a {kind} result, not a hotel — it cannot be booked as a stay.")
+    summary = verification_summary(run, candidate_id)
+    status = summary["verification_status"]
+    return {
         "run_id": run.get("run_id"),
         "candidate_id": candidate_id,
+        "target_type": "hotel",
         "hotel": {
             "name": cand.get("name") or cand.get("title") or None,
             "address": cand.get("address") or cand.get("location") or None,
@@ -118,10 +136,10 @@ def booking_context(run: dict, candidate_id: str) -> dict:
         },
         "price": price_info(cand),
         "verification_status": status,
-        "unresolved_requirements": unresolved,
-        "contradicted_requirements": _with("CONTRADICTED"),
+        "unresolved_requirements": summary["unresolved_requirements"],
+        "contradicted_requirements": summary["contradicted_requirements"],
         "bookable": status != "REJECTED",
-        "requires_acknowledgement": status != "VERIFIED",
+        "requires_acknowledgement": summary["requires_acknowledgement"],
         "disclaimer": DISCLAIMER,
     }
 

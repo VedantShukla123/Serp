@@ -61,9 +61,10 @@ test('auth forms validate fields (demo only, nothing is submitted)', () => {
 test('routes', () => {
   assert.deepEqual(parseRoute(''), { page: 'landing' })
   assert.deepEqual(parseRoute('#/signin'), { page: 'signin' })
-  assert.deepEqual(parseRoute('#/app'), { page: 'app', tab: 'assistant', sub: null })
-  assert.deepEqual(parseRoute('#/app/playground'), { page: 'app', tab: 'playground', sub: null })
-  assert.deepEqual(parseRoute('#/app/developers/mcp'), { page: 'app', tab: 'developers', sub: 'mcp' })
+  assert.deepEqual(parseRoute('#/app'), { page: 'app', tab: 'assistant', sub: null, arg: null })
+  assert.deepEqual(parseRoute('#/app/playground'), { page: 'app', tab: 'playground', sub: null, arg: null })
+  assert.deepEqual(parseRoute('#/app/developers/mcp'), { page: 'app', tab: 'developers', sub: 'mcp', arg: null })
+  assert.deepEqual(parseRoute('#/app/developers/trace/c28bb2b65036'), { page: 'app', tab: 'developers', sub: 'trace', arg: 'c28bb2b65036' })
   assert.deepEqual(parseRoute('#/nope'), { page: 'landing' })
 })
 

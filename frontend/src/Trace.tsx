@@ -2,6 +2,7 @@
    Pure presentation of real backend events — nothing here invents a status. */
 import { createContext, useContext } from 'react'
 import type { CandItem, TraceState } from './chat'
+import { actionLabel, targetTypeOf } from './actionTypes'
 import { rankReasonFor, verdictForCandidate } from './traceEvents'
 
 export function candId(c: CandItem): string {
@@ -25,18 +26,20 @@ export function verdictClass(s: string): 'ok' | 'bad' | 'warn' {
   return 'warn'
 }
 
-/* ---------- booking simulator entry (demo only): opened by candidate_id + run_id ---------- */
+/* ---------- simulated action entry (demo only): opened by run_id + candidate_id ----------
+   The label follows the run's target type (hotel / product / other); the modal itself asks
+   the backend which action fits this exact candidate, so nothing defaults to a hotel. */
 export type BookTarget = { runId: string; candidateId: string }
 export const BookContext = createContext<(t: BookTarget) => void>(() => {})
 
-export function BookButton({ runId, candidateId, status }: { runId: string | null | undefined; candidateId: string; status: string }) {
+export function BookButton({ runId, candidateId, status, targetType }: { runId: string | null | undefined; candidateId: string; status: string; targetType?: string | null }) {
   const open = useContext(BookContext)
   if (!runId || !candidateId) return null
-  const s = status.toUpperCase()
-  if (s === 'REJECTED') return <button className="bk-open" disabled title="Jev contradicted a required point">Rejected — not bookable</button>
+  const label = actionLabel(targetTypeOf({ target_type: targetType }), status)
+  if (!label.enabled) return <button className="bk-open" disabled title="Jev contradicted a required point">{label.text}</button>
   return (
-    <button className={'bk-open' + (s === 'VERIFIED' ? '' : ' warn')} onClick={() => open({ runId, candidateId })}>
-      {s === 'VERIFIED' ? 'Simulate booking' : 'Simulate booking (needs review)'}
+    <button className={'bk-open' + (status.toUpperCase() === 'VERIFIED' ? '' : ' warn')} onClick={() => open({ runId, candidateId })}>
+      {label.text}
     </button>
   )
 }
@@ -104,7 +107,7 @@ export function TraceView({ trace, onToggle }: { trace: TraceState; onToggle: ()
               <b className={trace.rejectedIds.includes(v.candidate_id) ? 'struck-text' : ''}>
                 {v.candidate_name || v.candidate_id} → <VerdictPill status={v.overall_status} />
               </b>
-              <BookButton runId={trace.final?.run_id} candidateId={v.candidate_id} status={v.overall_status} />
+              <BookButton runId={trace.final?.run_id} candidateId={v.candidate_id} status={v.overall_status} targetType={trace.final?.target_type} />
               <div className="verdict-rows">
                 {v.requirements.map((r, i) => (
                   <div className="verdict-row" key={i}>
@@ -160,7 +163,7 @@ export function FinalCard({ fin }: { fin: NonNullable<TraceState['final']> }) {
           {candUrl(c) && <a href={candUrl(c)!} target="_blank" rel="noreferrer">view source ↗</a>}
         </div>
         {fin.run_id && <div className="run-id">run {fin.run_id}</div>}
-        <BookButton runId={fin.run_id} candidateId={candId(c)} status={vover || 'VERIFIED'} />
+        <BookButton runId={fin.run_id} candidateId={candId(c)} status={vover || 'VERIFIED'} targetType={fin.target_type} />
       </div>
     )
   }
@@ -171,7 +174,7 @@ export function FinalCard({ fin }: { fin: NonNullable<TraceState['final']> }) {
         <div className="final-name">{candName(c)}</div>
         <p className="flag-intro">Best match is <b>not verified</b> — please confirm:</p>
         <ul className="flag-list">
-          {flagged.length === 0 && <li>Unverified overall status — confirm details with the seller before booking.</li>}
+          {flagged.length === 0 && <li>Unverified overall status — confirm details with the seller before acting.</li>}
           {flagged.map((r, i) => (
             <li key={i}><VerdictPill status={r.status} /> {r.requirement ?? r.requirement_id ?? `requirement ${i + 1}`}{r.reason ? ` — ${r.reason}` : ''}</li>
           ))}
@@ -182,7 +185,7 @@ export function FinalCard({ fin }: { fin: NonNullable<TraceState['final']> }) {
           {candUrl(c) && <a href={candUrl(c)!} target="_blank" rel="noreferrer">view source ↗</a>}
         </div>
         {fin.run_id && <div className="run-id">run {fin.run_id}</div>}
-        <BookButton runId={fin.run_id} candidateId={candId(c)} status={vover || 'UNVERIFIED'} />
+        <BookButton runId={fin.run_id} candidateId={candId(c)} status={vover || 'UNVERIFIED'} targetType={fin.target_type} />
       </div>
     )
   }

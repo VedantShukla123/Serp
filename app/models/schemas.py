@@ -150,6 +150,9 @@ class FindAndVerifyResponse(BaseModel):
     errors: list[str] = Field(default_factory=list)
     mocked: bool = False
     created_at: str = ""
+    # hotel | product | place | generic — from the search engine (see app/services/actions.py).
+    # Optional so runs stored before this field existed still load.
+    target_type: str | None = None
 
 
 class RunRecord(FindAndVerifyResponse):
@@ -167,4 +170,16 @@ class BookingRequest(BaseModel):
     guests: int | None = None
     check_in: str = ""
     check_out: str = ""
+    acknowledge_unverified: bool = False
+
+
+class OrderRequest(BaseModel):
+    """Simulated product order input. Product identity and price are resolved
+    server-side from the stored run by candidate_id — never taken from the client."""
+    run_id: str
+    candidate_id: str
+    buyer_name: str = ""
+    email: str = ""
+    quantity: int | None = None
+    delivery_address: str = ""
     acknowledge_unverified: bool = False

@@ -1,19 +1,20 @@
 import { useEffect, useState } from 'react'
 import Assistant from './Assistant'
 import { Forgot, SignIn, SignUp } from './Auth'
-import BookingSimulator from './BookingSimulator'
+import ActionSimulator from './ActionSimulator'
 import Developers from './Developers'
 import Landing, { Logo } from './Landing'
 import Playground from './Playground'
 import { BookContext, type BookTarget } from './Trace'
 import { useAgentChat } from './chat'
+import { API_BASE, API_ORIGIN, apiUrl } from './devhub'
 import { go, parseRoute, type Route } from './route'
 
 type Health = { state: 'checking' | 'ready' | 'degraded' | 'offline'; detail: string }
 
 /* ---------------- health (GET /health) ---------------- */
 async function checkHealth(): Promise<Health> {
-  const tries = ['/health', 'http://localhost:8000/health']
+  const tries = API_ORIGIN ? [apiUrl('/health')] : ['/health', `${API_BASE}/health`]
   for (const url of tries) {
     try {
       const ctl = new AbortController()
@@ -52,10 +53,10 @@ export default function App() {
   if (route.page === 'signin') return <SignIn />
   if (route.page === 'signup') return <SignUp />
   if (route.page === 'forgot') return <Forgot />
-  return <AppShell tab={route.tab} sub={route.sub} />
+  return <AppShell tab={route.tab} sub={route.sub} arg={route.arg} />
 }
 
-function AppShell({ tab, sub }: { tab: 'assistant' | 'playground' | 'developers'; sub: string | null }) {
+function AppShell({ tab, sub, arg }: { tab: 'assistant' | 'playground' | 'developers'; sub: string | null; arg: string | null }) {
   // Two independent conversations (own server sessions) that survive tab switches.
   const assistant = useAgentChat('proofgate.session_id')
   const playground = useAgentChat('proofgate.playground_session_id')
@@ -94,11 +95,11 @@ function AppShell({ tab, sub }: { tab: 'assistant' | 'playground' | 'developers'
         <main className="shell-main" key={tab}>
           {tab === 'assistant' && <Assistant chat={assistant} />}
           {tab === 'playground' && <Playground chat={playground} />}
-          {tab === 'developers' && <Developers sub={sub} />}
+          {tab === 'developers' && <Developers sub={sub} arg={arg} />}
         </main>
       </div>
       {bookTarget && (
-        <BookingSimulator key={bookTarget.runId + bookTarget.candidateId} runId={bookTarget.runId}
+        <ActionSimulator key={bookTarget.runId + bookTarget.candidateId} runId={bookTarget.runId}
           candidateId={bookTarget.candidateId} onClose={() => setBookTarget(null)} />
       )}
     </BookContext.Provider>

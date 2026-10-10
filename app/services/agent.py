@@ -323,6 +323,7 @@ def run_agent_turn(
         "selected_candidate": selected.model_dump() if selected is not None else None,
         "verification": verification.model_dump() if verification is not None else None,
         "attempts": [a.model_dump() for a in attempts],
+        "target_type": getattr(rec, "target_type", None),
         "session_id": sid,
     }
 
@@ -422,6 +423,7 @@ def sse_turn(
         "reply": reply,
         "status": getattr(rec, "status", "error"),
         "run_id": getattr(rec, "run_id", None),
+        "target_type": getattr(rec, "target_type", None),
         "selected_candidate": selected.model_dump() if selected is not None else None,
         "verification": verification.model_dump() if verification is not None else None,
         "attempts": [a.model_dump() for a in attempts],

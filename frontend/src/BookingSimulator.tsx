@@ -3,6 +3,7 @@ import {
   canSimulate, DISCLAIMER, fmtMoney, localToday, MAX_GUESTS, validateBookingForm,
   type BookingForm, type FieldErrors,
 } from './booking'
+import { apiUrl } from './devhub'
 
 /* Dynamic Booking Simulator — DEMO ONLY. Hotel, price and status come from the
    backend (stored run, by candidate_id); this component only sends guest details. */
@@ -33,7 +34,7 @@ type Booking = Preview & { booking_id: string; status: string; created_at: strin
 type ApiError = { code?: string; message?: string; errors?: Record<string, string> }
 
 async function api<T>(url: string, body?: unknown): Promise<T> {
-  const res = await fetch(url, body === undefined ? undefined : {
+  const res = await fetch(apiUrl(url), body === undefined ? undefined : {
     method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
   })
   const j = await res.json().catch(() => ({}))

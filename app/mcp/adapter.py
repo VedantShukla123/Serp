@@ -13,7 +13,7 @@ from app.models.schemas import (
     RunRecord,
     VerificationResult,
 )
-from app.services import jev_verifier, rank_reasons
+from app.services import actions, jev_verifier, rank_reasons
 from app.services.pipeline import run_find_and_verify
 from app.storage import store
 
@@ -44,7 +44,9 @@ def get_run(run_id: str) -> dict:
     data = store.get_run(settings.db_path, run_id)
     if data is None:
         raise KeyError(f"run not found: {run_id}")
-    return rank_reasons.relabel_run_dict(data)
+    data = rank_reasons.relabel_run_dict(data)
+    data["target_type"] = actions.run_target_type(data)
+    return data
 
 
 def get_evidence(run_id: str) -> dict:

@@ -13,7 +13,7 @@ app = FastAPI(title="ProofGate", version="0.1.0",
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=list(settings.allowed_origins),   # PROOFGATE_ALLOWED_ORIGINS; local dev origins by default
     allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],

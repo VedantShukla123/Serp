@@ -28,7 +28,7 @@ def _cand(cid: str, name: str, per_night: int | None, total: int | None) -> dict
     return {"candidate_id": cid, "name": name, "price": f"₹{per_night:,}" if per_night else None,
             "price_value": per_night, "currency": "INR", "address": "", "location": "",
             "cancellation_info": "", "source_url": f"https://example.test/{cid}", "booking_url": "",
-            "offer_details": offer}
+            "offer_details": offer, "engine": "google_hotels"}
 
 
 def _attempt(cid: str, overall: str, pairs: list[tuple[str, str]]) -> dict:
@@ -37,10 +37,12 @@ def _attempt(cid: str, overall: str, pairs: list[tuple[str, str]]) -> dict:
         "requirements": [{"requirement_id": k, "status": v} for k, v in pairs]}}
 
 
-# Shaped like stored run 12c1b202e909 (google_hotels). c4 is never checked.
+# Shaped like stored run 12c1b202e909 (google_hotels; every real candidate records its engine). c4 is never checked.
 RUN = {
     "run_id": "run-goa",
     "status": "verified",
+    "action": "book_hotel",
+    "serpapi_meta": {"engine": "google_hotels", "result_count": 4},
     "requirements": [
         {"id": "budget", "description": "Total price must be <= Rs 10,000", "importance": "required"},
         {"id": "guests", "description": "Must sleep at least 2 guests", "importance": "required"},
