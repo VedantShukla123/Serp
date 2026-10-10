@@ -1,6 +1,7 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react'
 import roboUrl from './assets/robo.png'
 import RoboViewer from './RoboViewer'
+import BookingSimulator from './BookingSimulator'
 import { isCandidateVerdict, normReq, rankedFromEvent, rankReasonFor, verdictForCandidate, type RankedItem, type ReqItem } from './traceEvents'
 
 /* ------------------------------------------------------------------ */
@@ -163,8 +164,25 @@ async function streamAgentChat(message: string, sessionId: string | null, h: Str
 }
 
 /* ================================================================== */
+/* Booking simulator entry point (demo only): opened by candidate_id + run_id. */
+type BookTarget = { runId: string; candidateId: string }
+const BookContext = createContext<(t: BookTarget) => void>(() => {})
+
+function BookButton({ runId, candidateId, status }: { runId: string | null | undefined; candidateId: string; status: string }) {
+  const open = useContext(BookContext)
+  if (!runId || !candidateId) return null
+  const s = status.toUpperCase()
+  if (s === 'REJECTED') return <button className="bk-open" disabled title="Jev contradicted a required point">Rejected — not bookable</button>
+  return (
+    <button className={'bk-open' + (s === 'VERIFIED' ? '' : ' warn')} onClick={() => open({ runId, candidateId })}>
+      {s === 'VERIFIED' ? 'Simulate booking' : 'Simulate booking (needs review)'}
+    </button>
+  )
+}
+
 export default function App() {
   const [messages, setMessages] = useState<ChatMsg[]>([])
+  const [bookTarget, setBookTarget] = useState<BookTarget | null>(null)
   const [input, setInput] = useState('')
   const [sending, setSending] = useState(false)
   const [health, setHealth] = useState<Health>({ state: 'checking', detail: 'checking…' })
@@ -377,6 +395,7 @@ export default function App() {
   const empty = messages.length === 0
 
   return (
+    <BookContext.Provider value={setBookTarget}>
     <div className="pg-app">
       {/* ---------- left rail ---------- */}
       <nav className="pg-rail" aria-label="Primary">
@@ -499,6 +518,11 @@ export default function App() {
         )}
       </div>
     </div>
+    {bookTarget && (
+      <BookingSimulator key={bookTarget.runId + bookTarget.candidateId} runId={bookTarget.runId}
+        candidateId={bookTarget.candidateId} onClose={() => setBookTarget(null)} />
+    )}
+    </BookContext.Provider>
   )
 }
 
@@ -565,6 +589,7 @@ function TraceView({ trace, msgId, patchTrace }: {
               <b className={trace.rejectedIds.includes(v.candidate_id) ? 'struck-text' : ''}>
                 {v.candidate_name || v.candidate_id} → <VerdictPill status={v.overall_status} />
               </b>
+              <BookButton runId={trace.final?.run_id} candidateId={v.candidate_id} status={v.overall_status} />
               <div className="verdict-rows">
                 {v.requirements.map((r, i) => (
                   <div className="verdict-row" key={i}>
@@ -624,6 +649,7 @@ function FinalCard({ fin }: { fin: NonNullable<TraceState['final']> }) {
           {candUrl(c) && <a href={candUrl(c)!} target="_blank" rel="noreferrer">view source ↗</a>}
         </div>
         {fin.run_id && <div className="run-id">run {fin.run_id}</div>}
+        <BookButton runId={fin.run_id} candidateId={candId(c)} status={vover || 'VERIFIED'} />
       </div>
     )
   }
@@ -645,6 +671,7 @@ function FinalCard({ fin }: { fin: NonNullable<TraceState['final']> }) {
           {candUrl(c) && <a href={candUrl(c)!} target="_blank" rel="noreferrer">view source ↗</a>}
         </div>
         {fin.run_id && <div className="run-id">run {fin.run_id}</div>}
+        <BookButton runId={fin.run_id} candidateId={candId(c)} status={vover || 'UNVERIFIED'} />
       </div>
     )
   }

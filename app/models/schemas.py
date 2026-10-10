@@ -155,3 +155,16 @@ class FindAndVerifyResponse(BaseModel):
 class RunRecord(FindAndVerifyResponse):
     candidates: list[Candidate] = Field(default_factory=list)
     raw_serpapi: Any = None
+
+
+class BookingRequest(BaseModel):
+    """Simulated booking input. Hotel identity and price are resolved server-side
+    from the stored run by candidate_id — the client never supplies them."""
+    run_id: str
+    candidate_id: str
+    guest_name: str = ""
+    email: str = ""
+    guests: int | None = None
+    check_in: str = ""
+    check_out: str = ""
+    acknowledge_unverified: bool = False

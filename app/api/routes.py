@@ -9,12 +9,13 @@ from pydantic import BaseModel
 
 from app.config import settings
 from app.models.schemas import (
+    BookingRequest,
     Candidate,
     FindAndVerifyRequest,
     FindAndVerifyResponse,
     VerifyRequest,
 )
-from app.services import jev_verifier, rank_reasons
+from app.services import booking, jev_verifier, rank_reasons
 from app.services.agent import run_agent_turn, sse_turn
 from app.services.pipeline import run_find_and_verify
 from app.storage import store
@@ -108,3 +109,44 @@ def agent_chat_stream(message: str = Query(...), session_id: str | None = Query(
                 yield f"data: {json.dumps(ev, default=str)}\n\n"
 
     return StreamingResponse(gen(), media_type="text/event-stream")
+
+
+# ---- Simulated booking (demo only: no real reservation, no payment) ----
+
+def _stored_run(run_id: str) -> dict:
+    data = store.get_run(settings.db_path, run_id)
+    if data is None:
+        raise HTTPException(status_code=404, detail={"code": "run_not_found", "message": "run not found", "errors": {}})
+    return data
+
+
+@router.get("/runs/{run_id}/candidates/{candidate_id}/booking-context")
+def booking_context(run_id: str, candidate_id: str):
+    try:
+        return booking.booking_context(_stored_run(run_id), candidate_id)
+    except booking.BookingError as e:
+        raise HTTPException(status_code=e.status, detail=e.detail())
+
+
+@router.post("/bookings/preview")
+def booking_preview(body: BookingRequest):
+    try:
+        return booking.preview_booking(_stored_run(body.run_id), body)
+    except booking.BookingError as e:
+        raise HTTPException(status_code=e.status, detail=e.detail())
+
+
+@router.post("/bookings")
+def booking_create(body: BookingRequest):
+    try:
+        return booking.create_booking(settings.db_path, _stored_run(body.run_id), body)
+    except booking.BookingError as e:
+        raise HTTPException(status_code=e.status, detail=e.detail())
+
+
+@router.get("/bookings/{booking_id}")
+def booking_get(booking_id: str):
+    data = store.get_booking(settings.db_path, booking_id)
+    if data is None:
+        raise HTTPException(status_code=404, detail={"code": "booking_not_found", "message": "booking not found", "errors": {}})
+    return data

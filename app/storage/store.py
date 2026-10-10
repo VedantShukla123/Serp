@@ -107,3 +107,39 @@ def get_history(db_path: str, session_id: str, limit: int = 8) -> list[dict]:
             (session_id, limit),
         ).fetchall()
     return [{"role": r["role"], "content": r["content"]} for r in reversed(rows)]
+
+
+# ---- Simulated bookings (append-only; demo records, never real reservations) ----
+
+def init_bookings(db_path: str) -> None:
+    with _lock, _connect(db_path) as conn:
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS bookings (
+                booking_id TEXT PRIMARY KEY,
+                created_at TEXT NOT NULL,
+                run_id TEXT NOT NULL,
+                candidate_id TEXT NOT NULL,
+                data TEXT NOT NULL
+            )
+            """
+        )
+        conn.commit()
+
+
+def save_booking(db_path: str, booking: dict) -> None:
+    init_bookings(db_path)
+    with _lock, _connect(db_path) as conn:
+        conn.execute(
+            "INSERT INTO bookings (booking_id, created_at, run_id, candidate_id, data) VALUES (?, ?, ?, ?, ?)",
+            (booking["booking_id"], booking["created_at"], booking["run_id"],
+             booking["candidate_id"], json.dumps(booking, default=str)),
+        )
+        conn.commit()
+
+
+def get_booking(db_path: str, booking_id: str) -> dict | None:
+    init_bookings(db_path)
+    with _lock, _connect(db_path) as conn:
+        row = conn.execute("SELECT data FROM bookings WHERE booking_id = ?", (booking_id,)).fetchone()
+        return None if row is None else json.loads(row["data"])
