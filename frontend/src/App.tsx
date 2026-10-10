@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import roboUrl from './assets/robo.png'
 import RoboViewer from './RoboViewer'
+import { isCandidateVerdict, rankedFromEvent, rankReasonFor, type RankedItem } from './traceEvents'
 
 /* ------------------------------------------------------------------ */
 /* Contract types (POST /v1/agent/chat + SSE /v1/agent/chat/stream)    */
@@ -16,7 +17,6 @@ type CandItem = {
   source_url?: string; url?: string; link?: string
   [k: string]: unknown
 }
-type RankedItem = { candidate_id?: string; id?: string; rank?: number; reason?: string; name?: string }
 type VerdictReq = { requirement?: string; requirement_id?: string; id?: string; status: string; reason?: string }
 type VerdictBlock = { candidate_id: string; candidate_name?: string; overall_status: string; requirements: VerdictReq[] }
 
@@ -225,11 +225,12 @@ export default function App() {
         patchTrace(msgId, (t) => ({ ...t, candidates: arr, candidateCount: count, statusLine: 'Ranking candidates…' }))
         break
       }
-      case 'ranking': {
-        const arr = Array.isArray(p.ranked) ? (p.ranked as RankedItem[]) : []
-        patchTrace(msgId, (t) => ({ ...t, ranked: arr, statusLine: arr.length ? 'Verifying candidates…' : t.statusLine }))
+      case 'ranking':
+        patchTrace(msgId, (t) => {
+          const arr = rankedFromEvent(p, t.candidates)
+          return { ...t, ranked: arr, statusLine: arr.length ? 'Verifying candidates…' : t.statusLine }
+        })
         break
-      }
       case 'verifying':
         patchTrace(msgId, (t) => ({
           ...t,
@@ -241,6 +242,8 @@ export default function App() {
         }))
         break
       case 'verdict': {
+        // Run-level verdict (no candidate_id) — the `final` event renders the decision.
+        if (!isCandidateVerdict(p)) break
         const vb: VerdictBlock = {
           candidate_id: str(p.candidate_id), candidate_name: str(p.candidate_name || p.candidate_id),
           overall_status: str(p.overall_status || 'UNKNOWN'),
@@ -557,7 +560,7 @@ function TraceView({ trace, msgId, patchTrace }: {
                     <div className={'rank-row' + (rejected ? ' struck' : '')} key={id + i}>
                       <span className="rank-n">#{r.rank ?? i + 1}</span>
                       <span className="rank-name">{String(r.name ?? id)}</span>
-                      {r.reason && <span className="rank-reason">{r.reason}</span>}
+                      <span className="rank-reason">{rankReasonFor(verdictFor(id)?.overall_status)}</span>
                     </div>
                   )
                 })}

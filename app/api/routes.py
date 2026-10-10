@@ -14,7 +14,7 @@ from app.models.schemas import (
     FindAndVerifyResponse,
     VerifyRequest,
 )
-from app.services import jev_verifier
+from app.services import jev_verifier, rank_reasons
 from app.services.agent import run_agent_turn, sse_turn
 from app.services.pipeline import run_find_and_verify
 from app.storage import store
@@ -52,7 +52,7 @@ def get_run(run_id: str):
     data = store.get_run(settings.db_path, run_id)
     if data is None:
         raise HTTPException(status_code=404, detail="run not found")
-    return data
+    return rank_reasons.relabel_run_dict(data)
 
 
 @router.get("/runs/{run_id}/evidence")

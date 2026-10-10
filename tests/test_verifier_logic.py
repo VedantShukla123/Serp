@@ -126,3 +126,38 @@ def test_typesafe_jev_mapping_with_stubbed_http(monkeypatch: pytest.MonkeyPatch)
     assert by_id["spa"].status == "CONTRADICTED"  # preferred: non-blocking
     assert res.overall_status == "UNVERIFIED"  # required beachfront UNKNOWN
     assert res.verifier.startswith("typesafe-jev:")
+
+
+def test_ranker_prompt_forbids_requirement_claims_in_reasons(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Ranking reasons are written before Jev runs, so the ranker is told
+    not to claim requirements are met (display is gated in the UI too)."""
+    seen: dict = {}
+
+    class FakeResp:
+        def raise_for_status(self) -> None:
+            pass
+
+        def json(self) -> dict:
+            return {"choices": [{"message": {"content":
+                '{"ranked_candidates": [{"candidate_id": "c1", "rank": 1, "reason": "relevant"}]}'}}]}
+
+    class FakeClient:
+        def __init__(self, *a: object, **k: object) -> None:
+            pass
+
+        def __enter__(self) -> FakeClient:
+            return self
+
+        def __exit__(self, *a: object) -> bool:
+            return False
+
+        def post(self, url: str, headers: dict, json: dict) -> FakeResp:
+            seen["system"] = json["messages"][0]["content"]
+            return FakeResp()
+
+    monkeypatch.setattr(llm_matcher.httpx, "Client", FakeClient)
+    s = Settings(serpapi_api_key="", llm_api_key="test-key", jev_api_key="", jev_endpoint="")
+    ranking, _ = llm_matcher.rank_candidates("q", [req("a")], [Candidate(candidate_id="c1", name="A")], s)
+    assert [rc.candidate_id for rc in ranking.ranked_candidates] == ["c1"]
+    assert 'never say it "meets all requirements"' in seen["system"]
+    assert "Never state that it meets, satisfies or includes a requirement" in seen["system"]

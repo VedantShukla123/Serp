@@ -9,7 +9,7 @@ from collections.abc import Callable
 
 from app.config import Settings
 from app.models.schemas import Candidate, RunRecord
-from app.services import decision_engine, jev_verifier, llm_matcher, requirement_parser, serpapi_service
+from app.services import decision_engine, jev_verifier, llm_matcher, rank_reasons, requirement_parser, serpapi_service
 from app.storage import store
 
 
@@ -86,8 +86,9 @@ def run_find_and_verify(
     except Exception as e:
         raise RuntimeError(f"llm_matcher_failed: {e}")
     timing["llm_ms"] = int((time.perf_counter() - t) * 1000)
+    # Nothing is verified yet: raw ranker reasons never leave the pipeline.
     _emit({"type": "ranking",
-           "ranked_candidates": [rc.model_dump() for rc in ranking.ranked_candidates],
+           "ranked_candidates": [rc.model_dump() for rc in rank_reasons.relabel(ranking.ranked_candidates, [])],
            "model": llm_meta.get("model") if isinstance(llm_meta, dict) else None})
 
     # 4-5. sequential Jev verification + deterministic decision
@@ -129,7 +130,7 @@ def run_find_and_verify(
         run_id=run_id, status=status,  # type: ignore[arg-type]
         request=request, action=action, requirements=requirements,
         candidate_count=len(candidates), candidates=candidates,
-        ranked_candidates=ranking.ranked_candidates,
+        ranked_candidates=rank_reasons.relabel(ranking.ranked_candidates, attempts),
         selected_candidate=selected, verification=verification, attempts=attempts,
         serpapi_meta=serp_meta, llm_meta=llm_meta, timing_ms=timing,
         errors=errors, mocked=False, created_at=created_at, raw_serpapi=raw,

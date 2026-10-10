@@ -117,6 +117,8 @@ Rules:
 - Explain what was done: how many candidates were searched, how they were ranked, and how Jev verified each requirement one by one. Mention any fallback (best available candidate returned for human review) when the trace summary says so.
 - State VERIFIED only when the trace summary explicitly says the selected candidate is VERIFIED. Otherwise flag the unverified/contradicted points and ask the user to confirm before acting.
 - Never call anything verified unless the trace says VERIFIED. Never invent prices, availability, or verdicts.
+- The trace summary includes code-computed status counts. Use those exact numbers. Never say "all" or "none" of the candidates have a status unless the counts show it, and never describe only the top-ranked candidates as if they were the whole set. If any candidate is REJECTED, say how many and which requirement was contradicted.
+- A code-generated verification status block is appended after your reply; never contradict it.
 - For direct answers (no search), just answer helpfully and briefly offer to search when they are ready."""
 
 
@@ -158,6 +160,54 @@ def composer_llm(
         raise RuntimeError(f"composer failed: {_sanitize(str(e), settings)}")
 
 
+_CANDIDATE_STATUSES = ("VERIFIED", "UNVERIFIED", "REJECTED")
+
+
+def _status_counts(attempts: list[Any]) -> dict[str, int]:
+    """Count Jev overall statuses across every verified attempt."""
+    counts = dict.fromkeys(_CANDIDATE_STATUSES, 0)
+    for a in attempts:
+        ov = getattr(getattr(a, "verification", None), "overall_status", None)
+        if ov in counts:
+            counts[ov] += 1
+    return counts
+
+
+def _status_summary(rec: Any) -> str:
+    """Deterministic status block built from the attempt records.
+
+    Appended verbatim to the chat reply so status accuracy never depends
+    on the composer LLM. Empty when no candidate was verified.
+    """
+    attempts = getattr(rec, "attempts", []) or []
+    if not attempts:
+        return ""
+    counts = _status_counts(attempts)
+    total = getattr(rec, "candidate_count", 0) or len(attempts)
+    lines = [
+        f"Verification status ({len(attempts)} of {total} candidates checked by Jev): "
+        + ", ".join(f"{s} {counts[s]}" for s in _CANDIDATE_STATUSES) + "."
+    ]
+    rejected = [a for a in attempts
+                if getattr(getattr(a, "verification", None), "overall_status", None) == "REJECTED"]
+    if rejected:
+        lines.append("Rejected (a required point was contradicted):")
+        for a in rejected:
+            reqs = getattr(a.verification, "requirements", []) or []
+            contradicted = [getattr(x, "requirement_id", "?") for x in reqs
+                            if getattr(x, "status", None) == "CONTRADICTED"]
+            lines.append(
+                f"- {getattr(a, 'candidate_name', '') or a.candidate_id} ({a.candidate_id}): "
+                f"{', '.join(contradicted) or 'a required point'} contradicted"
+            )
+    return "\n".join(lines)
+
+
+def _with_status_summary(reply: str, rec: Any) -> str:
+    block = _status_summary(rec)
+    return f"{reply}\n\n{block}" if block else reply
+
+
 def _trace_summary_for_record(rec: Any) -> str:
     try:
         status = getattr(rec, "status", "?")
@@ -170,6 +220,9 @@ def _trace_summary_for_record(rec: Any) -> str:
             f"Pipeline status: {status}.",
             f"Searched {count} candidates; ranked {len(ranked)} with the LLM ranker.",
         ]
+        status_block = _status_summary(rec)
+        if status_block:
+            lines.append(status_block)
         order = ", ".join(getattr(rc, "candidate_id", "?") for rc in ranked[:5])
         if order:
             lines.append(f"Rank order (top): {order}.")
@@ -256,7 +309,7 @@ def run_agent_turn(
            "message": "Understanding requirements..."})
     rec = _call_pipeline(message, action, settings, 15, engine, _emit)
     trace_summary = _trace_summary_for_record(rec)
-    reply = composer_llm(message, history, trace_summary, settings)
+    reply = _with_status_summary(composer_llm(message, history, trace_summary, settings), rec)
     store.save_turn(settings.db_path, sid, "user", message)
     store.save_turn(settings.db_path, sid, "assistant", reply)
 
@@ -350,7 +403,7 @@ def sse_turn(
         yield ev
     try:
         trace_summary = _trace_summary_for_record(rec)
-        reply = composer_llm(message, history, trace_summary, settings)
+        reply = _with_status_summary(composer_llm(message, history, trace_summary, settings), rec)
         store.save_turn(settings.db_path, sid, "user", message)
         store.save_turn(settings.db_path, sid, "assistant", reply)
     except RuntimeError as e:

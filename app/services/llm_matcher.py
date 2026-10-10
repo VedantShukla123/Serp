@@ -21,7 +21,8 @@ Rules:
 - Consider the whole candidate, not isolated keywords. Example: "located directly along the coast / private beach access" is stronger beachfront evidence than "5-minute walk to the beach".
 - Prefer candidates supported by available data.
 - Return ONLY valid JSON: {"ranked_candidates": [{"candidate_id": "...", "rank": 1, "reason": "..."}]}.
-- Rank ALL candidates provided, best match first. Do NOT declare anything verified."""
+- Rank ALL candidates provided, best match first. Do NOT declare anything verified.
+- Each "reason" explains only why the candidate looks relevant or promising. Never state that it meets, satisfies or includes a requirement, and never say it "meets all requirements" — a separate verifier decides that."""
 
 
 def _candidate_payload(c: Candidate) -> dict:

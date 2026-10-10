@@ -93,6 +93,23 @@ def test_6_all_fail_returns_best_for_human_review():
     assert ver is not None and ver.overall_status == "REJECTED"  # never labeled verified
 
 
+def test_6b_higher_ranked_rejected_not_selected_over_unverified():
+    r = reqs()
+    cands = {"c1": _cand("c1", "A"), "c2": _cand("c2", "B")}
+    ranked = [RankedCandidate(candidate_id="c1", rank=1), RankedCandidate(candidate_id="c2", rank=2)]
+    table = {
+        "c1": VerificationResult(candidate_id="c1", overall_status="REJECTED",
+                                 requirements=[RequirementVerdict(requirement_id="budget", status="CONTRADICTED")]),
+        "c2": VerificationResult(candidate_id="c2", overall_status="UNVERIFIED",
+                                 requirements=[RequirementVerdict(requirement_id="budget", status="UNKNOWN")]),
+    }
+    sel, ver, attempts, status = decision_engine.decide(r, ranked, cands, lambda c: table[c.candidate_id])
+    assert status == "needs_human_review"
+    assert sel is not None and sel.candidate_id == "c2"  # unproven beats disproven
+    assert ver is not None and ver.overall_status == "UNVERIFIED"
+    assert [a.candidate_id for a in attempts] == ["c1", "c2"]
+
+
 def test_7_preferred_unknown_still_verified():
     r = reqs()
     v = vr("c1", [("budget", "SATISFIED"), ("guests", "SATISFIED"), ("beachfront", "SATISFIED"), ("rating", "UNKNOWN")])
