@@ -105,5 +105,23 @@ def test_run_ids_are_encoded_as_one_path_segment() -> None:
 
 def test_client_paths_exist_in_the_real_api() -> None:
     paths = set(app.openapi()["paths"])
-    for p in ("/health", "/v1/runs", "/v1/runs/{run_id}", "/v1/runs/{run_id}/evidence", "/v1/find-and-verify", "/v1/verify"):
+    for p in ("/health", "/v1/runs", "/v1/runs/{run_id}", "/v1/runs/{run_id}/evidence", "/v1/find-and-verify", "/v1/verify",
+              "/v1/auth/status", "/v1/auth/login"):
         assert p in paths, p
+
+
+def test_login_and_token_are_sent_as_bearer() -> None:
+    seen: list[httpx.Request] = []
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        seen.append(req)
+        if req.url.path == "/v1/auth/login":
+            return httpx.Response(200, json={"token": "p.s", "token_type": "bearer", "expires_at": 1, "ttl_seconds": 1})
+        return httpx.Response(200, json=[])
+    pg = ProofGateClient("http://pg.test", transport=httpx.MockTransport(handler))
+    pg.login("demo-password-123")
+    pg.list_runs()
+    assert "authorization" not in seen[0].headers and seen[1].headers["authorization"] == "Bearer p.s"
+    pg2 = ProofGateClient("http://pg.test", token="t.k", transport=httpx.MockTransport(handler))
+    pg2.list_runs()
+    assert seen[2].headers["authorization"] == "Bearer t.k"

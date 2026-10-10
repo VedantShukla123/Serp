@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import BookingSimulator from './BookingSimulator'
-import { apiUrl } from './devhub'
+import { apiFetch } from './api'
 import OrderSimulator, { type OrderContext } from './OrderSimulator'
 
 /* Picks the simulated action for ONE candidate, as classified by the backend from the
@@ -25,7 +25,7 @@ export default function ActionSimulator({ runId, candidateId, onClose }: { runId
 
   useEffect(() => {
     const ctl = new AbortController()
-    fetch(apiUrl(`/v1/runs/${encodeURIComponent(runId)}/candidates/${encodeURIComponent(candidateId)}/action-context`), { signal: ctl.signal })
+    apiFetch(`/v1/runs/${encodeURIComponent(runId)}/candidates/${encodeURIComponent(candidateId)}/action-context`, { signal: ctl.signal })
       .then(async (r) => {
         const j = await r.json().catch(() => ({}))
         if (!r.ok) throw new Error(typeof j.detail === 'object' ? j.detail.message : j.detail || `HTTP ${r.status}`)

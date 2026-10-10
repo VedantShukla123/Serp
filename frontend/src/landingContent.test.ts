@@ -2,7 +2,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 
-import { LINKS, mostVisible, OUTCOMES, overall, PICK, REQS, STEPS } from './landingContent.ts'
+import { DEMO_RUN, LINKS, mostVisible, OUTCOMES, overall, PICK, REQS, STEPS } from './landingContent.ts'
 import { parseRoute } from './route.ts'
 
 test('every landing destination is a real route or an on-page anchor', () => {
@@ -14,7 +14,9 @@ test('every landing destination is a real route or an on-page anchor', () => {
   assert.deepEqual(parseRoute('#' + LINKS.navSignIn), { page: 'signin' })
   assert.deepEqual(parseRoute('#' + LINKS.navGetStarted), { page: 'signup' })
   assert.deepEqual(parseRoute('#' + LINKS.finalPrimary), { page: 'app', tab: 'assistant', sub: null, arg: null })
-  assert.deepEqual(parseRoute('#' + LINKS.previewRun), { page: 'app', tab: 'developers', sub: 'trace', arg: 'c28bb2b65036' })
+  // Never deep-link a hardcoded run: it 404s on a fresh deployment. The inspector picks a real run.
+  assert.deepEqual(parseRoute('#' + LINKS.previewRun), { page: 'app', tab: 'developers', sub: 'trace', arg: null })
+  assert.ok(Object.values(LINKS).every((to) => !to.includes(DEMO_RUN)))
   assert.deepEqual(parseRoute('#' + LINKS.devMcp), { page: 'app', tab: 'developers', sub: 'mcp', arg: null })
 })
 

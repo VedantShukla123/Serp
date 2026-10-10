@@ -18,6 +18,13 @@ def parse_origins(raw: str) -> tuple[str, ...]:
     return ("*",) if "*" in items else items
 
 
+def _int(name: str, default: int, lo: int, hi: int) -> int:
+    try:
+        return min(hi, max(lo, int(_get(name, str(default)))))
+    except ValueError:
+        return default
+
+
 def _get(name: str, default: str = "") -> str:
     v = os.getenv(name, default)
     return v.strip()
@@ -37,7 +44,16 @@ class Settings:
     jev_satisfied_at: float = 0.75
     jev_contradicted_below: float = 0.25
     jev_timeout_s: int = 60
-    proofgate_api_key: str = ""   # read but NOT enforced by any route (see DEPLOYMENT.md)
+    proofgate_api_key: str = ""   # legacy setting; not used for auth (see app/security.py)
+    production: bool = False      # PROOFGATE_ENV=production -> auth required, fail closed
+    demo_password: str = ""       # PROOFGATE_DEMO_PASSWORD (shared demo access password)
+    session_secret: str = ""      # PROOFGATE_SESSION_SECRET (HMAC key for session tokens)
+    session_ttl_min: int = 120
+    requests_per_min: int = 120   # per signed-in session, all /v1 calls
+    spend_per_session: int = 10   # live search/verification calls per session per window
+    spend_global_max: int = 60    # live search/verification calls per window across all sessions
+    spend_window_min: int = 60
+    client_ip_header: str = ""    # PROOFGATE_CLIENT_IP_HEADER: header set by your edge proxy with the visitor IP (e.g. True-Client-IP)
     db_path: str = "./proofgate.db"
     allowed_origins: tuple[str, ...] = parse_origins(DEV_ORIGINS)
 
@@ -87,6 +103,15 @@ def load_settings() -> Settings:
         proofgate_api_key=_get("PROOFGATE_API_KEY"),
         db_path=_get("PROOFGATE_DB_PATH", "./proofgate.db"),
         allowed_origins=parse_origins(_get("PROOFGATE_ALLOWED_ORIGINS", DEV_ORIGINS)),
+        production=_get("PROOFGATE_ENV").lower() == "production",
+        demo_password=_get("PROOFGATE_DEMO_PASSWORD"),
+        session_secret=_get("PROOFGATE_SESSION_SECRET"),
+        session_ttl_min=_int("PROOFGATE_SESSION_TTL_MIN", 120, 5, 1440),
+        requests_per_min=_int("PROOFGATE_REQUESTS_PER_MIN", 120, 10, 10000),
+        spend_per_session=_int("PROOFGATE_SPEND_PER_SESSION", 10, 1, 10000),
+        spend_global_max=_int("PROOFGATE_SPEND_GLOBAL_MAX", 60, 1, 100000),
+        spend_window_min=_int("PROOFGATE_SPEND_WINDOW_MIN", 60, 1, 1440),
+        client_ip_header=_get("PROOFGATE_CLIENT_IP_HEADER").strip().lower(),
     )
 
 

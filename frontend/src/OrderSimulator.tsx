@@ -1,6 +1,6 @@
 import { useState, type FormEvent } from 'react'
 import { canSimulate } from './booking'
-import { apiUrl } from './devhub'
+import { apiFetch } from './api'
 import { fmtListed, MAX_QUANTITY, ORDER_DISCLAIMER, validateOrderForm, type OrderErrors, type OrderForm } from './actionTypes'
 
 /* Simulated PRODUCT ORDER — demo only. Product, listed price and Jev status come from the
@@ -21,7 +21,7 @@ type Order = Preview & { order_id: string; status: string; created_at: string; a
 type ApiError = { code?: string; message?: string; errors?: Record<string, string> }
 
 async function post<T>(url: string, body: unknown): Promise<T> {
-  const res = await fetch(apiUrl(url), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
+  const res = await apiFetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
   const j = await res.json().catch(() => ({}))
   if (!res.ok) {
     const d = (j as { detail?: ApiError | string }).detail

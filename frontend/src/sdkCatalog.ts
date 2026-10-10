@@ -1,7 +1,7 @@
 /* SDKs & integrations — what exists in this repository and how to start (no React; unit-tested).
    Facts: run.py, run_mcp.py (+ tests/test_mcp_server.py), proofgate_client/, app/mcp/adapter.py,
    app/api/routes.py. Nothing here is published to a package registry. */
-import { example, type Shell } from './devhub.ts'
+import { API_BASE, example, type Shell } from './devhub.ts'
 import { mcpCmd } from './mcpSetup.ts'
 
 export type Group = 'now' | 'local' | 'demo' | 'soon' | 'none'
@@ -57,13 +57,17 @@ export const INTEGRATIONS: Integration[] = [
     what: 'proofgate_client: a small typed wrapper around the REST API (httpx), with clear exceptions.',
     today: 'health(), list_runs(), get_run(), get_evidence() free; find_and_verify() and verify() use credits.',
     steps: ['Start the API (python run.py --serve).', 'Run Python from the repository root, or add it to PYTHONPATH.'],
-    code: () => ({ lang: 'python', code: `from proofgate_client import ProofGateClient, ProofGateNotFound
+    code: () => ({ lang: 'python', code: `from getpass import getpass
+from proofgate_client import ProofGateClient, ProofGateNotFound
 
-with ProofGateClient("http://localhost:8000") as pg:
+with ProofGateClient("${API_BASE}") as pg:
+    if pg.auth_status()["auth_required"]:  # deployed demo: shared demo password -> short-lived token
+        pg.login(getpass("Demo password: "))
     print(pg.health()["ready"])
-    latest = pg.list_runs(limit=1)[0]["run_id"]
-    run = pg.get_run(latest)              # free; ProofGateNotFound if unknown
-    print(run["status"], len(run["attempts"]), "candidates checked")` }),
+    runs = pg.list_runs(limit=1)          # free; empty on a fresh server
+    if runs:
+        run = pg.get_run(runs[0]["run_id"])   # ProofGateNotFound if unknown
+        print(run["status"], len(run["attempts"]), "candidates checked")` }),
     note: 'Not on PyPI — there is no pip install for it yet. See proofgate_client/README.md.',
   },
   {

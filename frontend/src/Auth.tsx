@@ -1,11 +1,11 @@
-import { useState, type FormEvent, type ReactNode } from 'react'
+import { useEffect, useState, type FormEvent, type ReactNode } from 'react'
 import { Logo } from './Landing'
 import { go } from './route'
-import { validateForgot, validateSignIn, validateSignUp, type AuthErrors } from './authForms'
+import { authStatus, getToken, login, type AuthStatus } from './api'
 
-/* Access screens. This build has NO authentication backend: forms validate locally
-   for feedback only. Credentials are never sent anywhere or stored, and no account
-   is created. The honest path in is "demo access". */
+/* Access screens. ProofGate has NO user accounts: a deployed demo is protected by one shared
+   demo password, checked by the server (POST /v1/auth/login), which returns a short-lived
+   signed session token. Sign-up and password reset therefore only explain this. */
 
 function Shell({ title, sub, children, foot }: { title: string; sub: string; children: ReactNode; foot: ReactNode }) {
   return (
@@ -24,7 +24,7 @@ function Shell({ title, sub, children, foot }: { title: string; sub: string; chi
       </aside>
       <main className="auth-main">
         <div className="auth-card enter">
-          <div className="demo-banner">Demo access · account sign-in is coming soon</div>
+          <div className="demo-banner">Demo access · one shared demo password, no personal accounts</div>
           <h1>{title}</h1>
           <p className="muted">{sub}</p>
           {children}
@@ -57,103 +57,93 @@ function Password({ value, onChange, autoComplete, label = 'Password', error, hi
   )
 }
 
-function DemoNotice({ what }: { what: string }) {
+function Notice({ title, children }: { title: string; children: ReactNode }) {
   return (
     <div className="demo-notice enter" role="status">
-      <b>{what}</b>
-      <p>Authentication isn’t available in this demo build. Nothing was sent to a server or stored, and no account exists. You can continue into the demo workspace.</p>
-      <button className="btn primary block" onClick={() => go('/app')}>Enter demo workspace</button>
+      <b>{title}</b>
+      {children}
     </div>
   )
 }
 
-function DemoButton() {
-  return <button type="button" className="btn secondary block" onClick={() => go('/app')}>Continue with demo access</button>
-}
-
 export function SignIn() {
-  const [f, setF] = useState({ email: '', password: '' })
-  const [e, setE] = useState<AuthErrors>({})
-  const [done, setDone] = useState(false)
-  function submit(ev: FormEvent) {
+  const [status, setStatus] = useState<AuthStatus | null | 'loading'>('loading')
+  const [password, setPassword] = useState('')
+  const [error, setError] = useState<string | undefined>()
+  const [busy, setBusy] = useState(false)
+
+  useEffect(() => {
+    if (getToken()) { go('/app'); return }
+    let live = true
+    authStatus().then((s) => { if (live) setStatus(s) })
+    return () => { live = false }
+  }, [])
+
+  async function submit(ev: FormEvent) {
     ev.preventDefault()
-    const errs = validateSignIn(f)
-    setE(errs)
-    if (Object.keys(errs).length) return
-    setF({ ...f, password: '' })   // never keep the password around
-    setDone(true)
+    if (!password) { setError('Enter the demo password.'); return }
+    setBusy(true)
+    const r = await login(password)
+    setPassword('')                     // never keep the password around
+    setBusy(false)
+    if (r.ok) go('/app')
+    else setError(r.message)
   }
+
+  let body: ReactNode
+  if (status === 'loading') body = <p className="muted" role="status">Checking access…</p>
+  else if (status === null) body = (
+    <Notice title="The ProofGate backend could not be reached.">
+      <p>Start it (locally: <code>python run.py --serve</code>) and reload this page.</p>
+    </Notice>
+  )
+  else if (!status.configured) body = (
+    <Notice title="Access is not configured on this server.">
+      <p>The server requires sign-in but its demo password or session secret is missing or too short, so the API stays closed. The operator needs to set them in the hosting dashboard.</p>
+    </Notice>
+  )
+  else if (!status.auth_required) body = (
+    <Notice title="This server does not require sign-in.">
+      <p>It is running in local development mode. No password is needed.</p>
+      <button className="btn primary block" onClick={() => go('/app')}>Enter demo workspace</button>
+    </Notice>
+  )
+  else body = (
+    <form onSubmit={submit} noValidate className="form">
+      <Password label="Demo password" value={password} onChange={(v) => { setPassword(v); setError(undefined) }} autoComplete="current-password" error={error}
+        hint="Ask the person who shared this demo. Your session lasts a limited time." />
+      <button className="btn primary block" disabled={busy}>{busy ? 'Signing in…' : 'Enter demo workspace'}</button>
+    </form>
+  )
+
   return (
-    <Shell title="Welcome back" sub="Sign in to your ProofGate workspace."
-      foot={<>New here? <button className="link" onClick={() => go('/signup')}>Create an account</button></>}>
-      {done ? <DemoNotice what="Signed in? Not quite." /> : (
-        <form onSubmit={submit} noValidate className="form">
-          <DemoButton />
-          <div className="or"><span>or sign in with email</span></div>
-          <Field label="Email" error={e.email}><input type="email" value={f.email} onChange={(x) => setF({ ...f, email: x.target.value })} autoComplete="email" /></Field>
-          <Password value={f.password} onChange={(v) => setF({ ...f, password: v })} autoComplete="current-password" error={e.password} />
-          <div className="row-end"><button type="button" className="link" onClick={() => go('/forgot')}>Forgot password?</button></div>
-          <button className="btn primary block">Sign in</button>
-        </form>
-      )}
+    <Shell title="Sign in to the demo" sub="This ProofGate demo is protected by a shared password."
+      foot={<>No password? <button className="link" onClick={() => go('/signup')}>How access works</button></>}>
+      {body}
     </Shell>
   )
 }
 
 export function SignUp() {
-  const [f, setF] = useState({ name: '', email: '', password: '', confirm: '', terms: false })
-  const [e, setE] = useState<AuthErrors>({})
-  const [done, setDone] = useState(false)
-  function submit(ev: FormEvent) {
-    ev.preventDefault()
-    const errs = validateSignUp(f)
-    setE(errs)
-    if (Object.keys(errs).length) return
-    setF({ ...f, password: '', confirm: '' })
-    setDone(true)
-  }
   return (
-    <Shell title="Create your workspace" sub="Verification for every action your agents take."
-      foot={<>Already have access? <button className="link" onClick={() => go('/signin')}>Sign in</button></>}>
-      {done ? <DemoNotice what="No account was created." /> : (
-        <form onSubmit={submit} noValidate className="form">
-          <DemoButton />
-          <div className="or"><span>or sign up with email</span></div>
-          <Field label="Name" error={e.name}><input value={f.name} onChange={(x) => setF({ ...f, name: x.target.value })} autoComplete="name" /></Field>
-          <Field label="Work email" error={e.email}><input type="email" value={f.email} onChange={(x) => setF({ ...f, email: x.target.value })} autoComplete="email" /></Field>
-          <Password value={f.password} onChange={(v) => setF({ ...f, password: v })} autoComplete="new-password" error={e.password} hint="At least 8 characters, with letters and a number." />
-          <Password label="Confirm password" value={f.confirm} onChange={(v) => setF({ ...f, confirm: v })} autoComplete="new-password" error={e.confirm} />
-          <label className={'check' + (e.terms ? ' invalid' : '')}>
-            <input type="checkbox" checked={f.terms} onChange={(x) => setF({ ...f, terms: x.target.checked })} />
-            <span>I understand this is a demo workspace and no account will be created.</span>
-          </label>
-          {e.terms && <em className="err-text sm">{e.terms}</em>}
-          <button className="btn primary block">Create account</button>
-        </form>
-      )}
+    <Shell title="Access to this demo" sub="There is nothing to sign up for."
+      foot={<>Have the password? <button className="link" onClick={() => go('/signin')}>Sign in</button></>}>
+      <Notice title="ProofGate has no user accounts.">
+        <p>This demo is protected by a single shared demo password set by whoever runs it. Ask them for it, then sign in. No account is created and no personal data is collected.</p>
+        <button className="btn primary block" onClick={() => go('/signin')}>Go to sign in</button>
+      </Notice>
     </Shell>
   )
 }
 
 export function Forgot() {
-  const [email, setEmail] = useState('')
-  const [e, setE] = useState<AuthErrors>({})
-  const [done, setDone] = useState(false)
   return (
-    <Shell title="Reset your password" sub="We’ll explain what happens in this demo build."
+    <Shell title="Forgot the password?" sub="There is no account to recover."
       foot={<><button className="link" onClick={() => go('/signin')}>← Back to sign in</button></>}>
-      {done ? (
-        <div className="demo-notice enter" role="status">
-          <b>No email was sent.</b>
-          <p>Password reset needs real accounts, which this demo build doesn’t have. Use demo access instead.</p>
-          <button className="btn primary block" onClick={() => go('/app')}>Enter demo workspace</button>
-        </div>
-      ) : (
-        <form className="form" noValidate onSubmit={(ev) => { ev.preventDefault(); const errs = validateForgot({ email }); setE(errs); if (!Object.keys(errs).length) setDone(true) }}>
-          <Field label="Email" error={e.email}><input type="email" value={email} onChange={(x) => setEmail(x.target.value)} autoComplete="email" /></Field>
-          <button className="btn primary block">Send reset link</button>
-        </form>
-      )}
+      <Notice title="No reset email can be sent.">
+        <p>The demo password is shared, not personal. Ask the person who runs this demo for it.</p>
+        <button className="btn primary block" onClick={() => go('/signin')}>Back to sign in</button>
+      </Notice>
     </Shell>
   )
 }

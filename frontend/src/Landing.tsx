@@ -6,7 +6,7 @@ import { go } from './route'
 
 /* Public homepage. Motion: CSS + SVG + IntersectionObserver only (no animation library).
    Everything still reads with prefers-reduced-motion. Illustrations are labelled as such;
-   the example data is the stored Goa run c28bb2b65036 — never a live operation. */
+   the example data is copied from recorded Goa run c28bb2b65036 — never a live operation. */
 
 const reduceMotion = () => typeof window !== 'undefined' && !!window.matchMedia?.('(prefers-reduced-motion: reduce)').matches
 
@@ -106,7 +106,7 @@ function StageVisual({ id }: { id: (typeof STEPS)[number]['id'] }) {
           {[[PICK.name, PICK.price], ['Sibaya Beach Resort', 'listed price'], ['BEACHOUSE beachfront cottages', 'listed price']].map(([n, p], i) => (
             <div key={n} className="sv-row" style={{ '--i': i } as React.CSSProperties}><span className="sv-dot" /><b>{n}</b><small>{p}</small></div>
           ))}
-          <small className="sv-foot">15 candidates from SerpApi in run {DEMO_RUN}</small>
+          <small className="sv-foot">15 candidates from SerpApi · recorded run {DEMO_RUN}</small>
         </div>
       )
     case 'jev':
@@ -165,7 +165,7 @@ function HowItWorks() {
             <div className="hiw-screen">
               {STEPS.map((s, i) => <div key={s.id} className={'hiw-view' + (i === active ? ' on' : '')}><StageVisual id={s.id} /></div>)}
             </div>
-            <p className="hiw-cap">Example: stored run {DEMO_RUN}</p>
+            <p className="hiw-cap">Recorded example: run {DEMO_RUN}</p>
           </div>
         </div>
         <ol className="hiw-steps">
@@ -231,11 +231,11 @@ function Preview() {
       <div className="prev-copy" data-rv>
         <span className="eyebrow">Product preview</span>
         <h2 id="prev-title">See exactly why an option passed or failed.</h2>
-        <p className="lede">In this real Goa search no hotel could be fully verified. ProofGate said so — it flagged the best match for review and rejected the hotels whose evidence contradicted a requirement.</p>
-        <button className="btn secondary" onClick={() => nav(LINKS.previewRun)}>Inspect this run →</button>
+        <p className="lede">In this recorded Goa search no hotel could be fully verified. ProofGate said so — it flagged the best match for review and rejected the hotels whose evidence contradicted a requirement.</p>
+        <button className="btn secondary" onClick={() => nav(LINKS.previewRun)}>Inspect your stored runs →</button>
       </div>
       <div className="preview2 card" data-rv>
-        <div className="pv-head"><b>How I verified this</b><small>stored run {DEMO_RUN}</small></div>
+        <div className="pv-head"><b>How I verified this</b><small>recorded example · run {DEMO_RUN}</small></div>
         <div className="req-chips">{REQS.map((r, i) => <span className="req-chip" key={r} style={{ '--i': i } as React.CSSProperties}>{r}</span>)}</div>
         <div className="pv-rows">
           {PREVIEW_ROWS.map(([n, s, cells], r) => (

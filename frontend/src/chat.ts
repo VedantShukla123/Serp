@@ -2,7 +2,7 @@
    Extracted unchanged from App.tsx so the Assistant and the Playground drive the
    SAME real backend stream (GET /v1/agent/chat/stream, POST /v1/agent/chat). */
 import { useCallback, useRef, useState } from 'react'
-import { apiUrl } from './devhub'
+import { apiFetch } from './api'
 import { traceFromRun, type StoredRun } from './replay'
 import { isCandidateVerdict, normReq, rankedFromEvent, type RankedItem, type ReqItem } from './traceEvents'
 
@@ -76,7 +76,7 @@ type StreamHandlers = { onEvent: (type: string, payload: Record<string, unknown>
 async function streamAgentChat(message: string, sessionId: string | null, h: StreamHandlers, signal: AbortSignal): Promise<void> {
   const qs = new URLSearchParams({ message })
   if (sessionId) qs.set('session_id', sessionId)
-  const res = await fetch(apiUrl(`/v1/agent/chat/stream?${qs.toString()}`), { headers: { Accept: 'text/event-stream' }, signal })
+  const res = await apiFetch(`/v1/agent/chat/stream?${qs.toString()}`, { headers: { Accept: 'text/event-stream' }, signal })
   if (!res.ok || !res.body) throw new Error(`stream_unavailable: HTTP ${res.status}`)
   const reader = res.body.getReader()
   const decoder = new TextDecoder()
@@ -201,7 +201,7 @@ export function useAgentChat(sessionKey: string) {
   async function runPostFallback(msgId: string, message: string) {
     const body: Record<string, string> = { message }
     if (sessionRef.current) body.session_id = sessionRef.current
-    const res = await fetch(apiUrl('/v1/agent/chat'), {
+    const res = await apiFetch('/v1/agent/chat', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body), signal: abortRef.current?.signal,
     })

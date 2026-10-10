@@ -1,5 +1,5 @@
-/* Demo-access form validation (no React). There is NO authentication backend in this
-   build: these validators only drive UI feedback; credentials are never sent or stored. */
+/* Email/password form validators (no React). No longer used by the access screens, which now
+   ask only for the shared demo password (see Auth.tsx / api.ts); kept with their unit tests. */
 
 export type AuthErrors = Partial<Record<'name' | 'email' | 'password' | 'confirm' | 'terms', string>>
 const EMAIL = /^[^@\s]+@[^@\s]+\.[^@\s]+$/

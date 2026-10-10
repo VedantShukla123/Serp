@@ -1,7 +1,8 @@
 """Small synchronous REST client for a local ProofGate API (app/api/routes.py).
 
-Only wraps endpoints that exist. No authentication is sent or implied: the local
-API does not check any key. Uses httpx, already a ProofGate dependency.
+Only wraps endpoints that exist. A local development server needs no sign-in; a deployed
+demo requires a bearer token from POST /v1/auth/login (pass `token=` or call `login()`).
+Uses httpx, already a ProofGate dependency.
 """
 from __future__ import annotations
 
@@ -51,12 +52,21 @@ class ProofGateClient:
     """
 
     def __init__(self, base_url: str = DEFAULT_BASE_URL, *, timeout: float = 30.0,
-                 verify_timeout: float = 300.0, transport: httpx.BaseTransport | None = None):
+                 verify_timeout: float = 300.0, transport: httpx.BaseTransport | None = None,
+                 token: str | None = None):
         """`timeout` applies to reads; `verify_timeout` to find_and_verify / verify, which run
         live searches and LLM/Jev calls and can take minutes. `transport` is for tests."""
         self.base_url = base_url.rstrip("/")
         self.verify_timeout = verify_timeout
         self._http = httpx.Client(base_url=self.base_url, timeout=timeout, transport=transport)
+        if token:
+            self._http.headers["Authorization"] = f"Bearer {token}"
+
+    def login(self, password: str) -> dict:
+        """Exchange the shared demo password for a short-lived session token (used for later calls)."""
+        out = self._request("POST", "/v1/auth/login", json={"password": password})
+        self._http.headers["Authorization"] = f"Bearer {out['token']}"
+        return out
 
     # -- plumbing ------------------------------------------------------------
     def _request(self, method: str, path: str, *, json: Any = None, params: dict | None = None,
@@ -91,6 +101,10 @@ class ProofGateClient:
         self.close()
 
     # -- free, read-only -----------------------------------------------------
+    def auth_status(self) -> dict:
+        """GET /v1/auth/status → {auth_required, configured} (public)."""
+        return self._request("GET", "/v1/auth/status")
+
     def health(self) -> dict:
         """GET /health → {ok, service, ready, missing_credentials, has_serpapi_key, has_llm_key, has_jev}."""
         return self._request("GET", "/health")

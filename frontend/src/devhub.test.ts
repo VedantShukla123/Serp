@@ -26,7 +26,7 @@ test('PowerShell examples never use the curl alias or hand-quoted JSON', () => {
 
 test('PowerShell lists array endpoints as a table (no {value, Count} wrapper)', () => {
   assert.equal(example({ method: 'GET', path: '/v1/runs?limit=5', table: ['run_id', 'created_at', 'request'] }, 'powershell'),
-    '(Invoke-RestMethod "http://localhost:8000/v1/runs?limit=5") | Format-Table run_id, created_at, request -AutoSize')
+    '(Invoke-RestMethod "http://localhost:8000/v1/runs?limit=5" -Headers @{ Authorization = "Bearer $env:PROOFGATE_TOKEN" }) | Format-Table run_id, created_at, request -AutoSize')
   assert.equal(example({ method: 'GET', path: '/v1/runs?limit=5', table: ['run_id'] }, 'bash'), "curl -s 'http://localhost:8000/v1/runs?limit=5'")
 })
 

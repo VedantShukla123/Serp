@@ -2,9 +2,10 @@ import { useCallback, useEffect, useRef, useState, type KeyboardEvent, type Reac
 import { go } from './route'
 import { VerdictPill } from './Trace'
 import {
-  API_BASE, AVAIL, apiUrl, checkRunId, describeError, example, initialRun, latestGuard, missingStatus, RUN_STATUS_TEXT, RUNS_PAGE, shortId, statusCounts, traceRows,
+  API_BASE, AVAIL, checkRunId, describeError, example, initialRun, loginExample, latestGuard, missingStatus, RUN_STATUS_TEXT, RUNS_PAGE, shortId, statusCounts, traceRows,
   type Avail, type LoadError, type Shell, type StoredRunDoc, type TraceRow,
 } from './devhub'
+import { apiFetch } from './api'
 import { COST, epKey, filterGroups, GROUPS, PLACEHOLDER_IDS, type Cost, type ExampleIds } from './apiCatalog'
 import { MCP_TOOLS, mcpCmd, mcpConfig, PLACEHOLDER_NIX } from './mcpSetup'
 import { GROUP_INFO, GROUP_ORDER, INTEGRATIONS } from './sdkCatalog'
@@ -95,7 +96,7 @@ async function getJson<T>(url: string, signal: AbortSignal, timeoutMs = 12000): 
   const onAbort = () => ctl.abort()
   signal.addEventListener('abort', onAbort)
   try {
-    const r = await fetch(/^https?:/.test(url) ? url : apiUrl(url), { signal: ctl.signal })
+    const r = await apiFetch(url, { signal: ctl.signal })
     if (!r.ok) throw Object.assign(new Error(`HTTP ${r.status}`), { status: r.status })
     return (await r.json()) as T
   } finally {
@@ -352,7 +353,7 @@ function RestApi({ shell, setShell, openKey }: { shell: Shell; setShell: (s: She
           <CopyButton text={API_BASE} label="Copy base URL" />
           <a className="link sm" href={`${API_BASE}/docs`} target="_blank" rel="noreferrer">FastAPI docs (/docs) ↗</a>
         </div>
-        <p className="api-warn sm"><b>Local development only.</b> Not publicly hosted. No authentication — <code>PROOFGATE_API_KEY</code> is not checked by any route.</p>
+        <p className="api-warn sm"><b>Sign-in required when deployed.</b> A deployed server needs <code>Authorization: Bearer &lt;token&gt;</code> on every <code>/v1</code> call (token from <code>POST /v1/auth/login</code> with the demo password); a local development server needs none. Live search/verification calls are rate-limited per session.</p>
         <div className="api-tools">
           <label className="search">
             <span className="sr">Search endpoints</span>
@@ -367,6 +368,10 @@ function RestApi({ shell, setShell, openKey }: { shell: Shell; setShell: (s: She
             ))}
           </div>
           <ShellSwitch shell={shell} setShell={setShell} />
+        </div>
+        <div className="api-login">
+          <p className="sm"><b>1 · Sign in first (deployed demo).</b> <code>POST /v1/auth/login</code> takes <code>{'{"password": "…"}'}</code> — the shared demo password from whoever runs the demo — and returns <code>{'{"token", "expires_at", "ttl_seconds"}'}</code>. This prompts for the password and keeps the short-lived token in <code>PROOFGATE_TOKEN</code>; every example below sends it as <code>Authorization: Bearer $PROOFGATE_TOKEN</code>. A local development server needs no sign-in and ignores the header. <code>/health</code> and <code>/v1/auth/*</code> are public.</p>
+          <Code lang={shell === 'bash' ? 'bash' : 'PowerShell'} code={loginExample(shell)} />
         </div>
       </section>
 
@@ -738,7 +743,8 @@ function TraceInspector({ runId }: { runId: string | null }) {
       <section className="ins-detail" aria-live="polite" aria-busy={run.s === 'loading'}>
         {run.s === 'idle' && list.s === 'loading' && <div className="card pad loading-row"><span className="spinner" /> Loading recent runs…</div>}
         {run.s === 'idle' && list.s !== 'loading' && !inputErr && rows.length === 0 && (
-          <div className="card pad empty-state"><h3>Nothing to inspect yet</h3><p>Once a request has been verified, its run appears here automatically.</p></div>
+          <div className="card pad empty-state"><h3>Nothing to inspect yet</h3><p>This server has no stored runs. Once a request has been verified, its run appears here automatically.</p>
+            <button className="btn primary sm" onClick={() => go('/app/playground')}>Run a search in the Playground</button></div>
         )}
         {run.s === 'idle' && inputErr && <div className="card pad"><ErrorBox err={{ kind: 'http', title: 'That run ID can’t be valid', detail: inputErr }} /></div>}
         {run.s === 'loading' && <div className="card pad loading-row"><span className="spinner" /> Loading run {runId}…</div>}
@@ -837,9 +843,34 @@ function RunDetail({ doc }: { doc: StoredRunDoc }) {
         <summary>Raw SerpApi payload {raw == null ? <span className="muted sm">(not stored)</span> : <span className="muted sm">({Math.round(JSON.stringify(raw).length / 1024)} KB)</span>}</summary>
         {rawOpen && raw != null && <div className="raw-body"><pre tabIndex={0}>{JSON.stringify(raw, null, 2)}</pre></div>}
       </details>
-      <p className="sm"><a href={`${API_BASE}/v1/runs/${encodeURIComponent(doc.run_id)}/evidence`} target="_blank" rel="noreferrer">Open GET /v1/runs/{doc.run_id}/evidence ↗</a></p>
+      <p className="sm"><EvidenceLink runId={doc.run_id} /></p>
       </div>
     </div>
+  )
+}
+
+/** Opens the raw evidence JSON in a new tab. Fetched with the session token (a plain link can't send it). */
+function EvidenceLink({ runId }: { runId: string }) {
+  const [err, setErr] = useState<string | null>(null)
+  async function open() {
+    const tab = window.open('', '_blank')
+    try {
+      const r = await apiFetch(`/v1/runs/${encodeURIComponent(runId)}/evidence`)
+      if (!r.ok) throw new Error(`HTTP ${r.status}`)
+      const url = URL.createObjectURL(new Blob([JSON.stringify(await r.json(), null, 2)], { type: 'application/json' }))
+      if (tab) tab.location.href = url; else window.open(url, '_blank')
+      setTimeout(() => URL.revokeObjectURL(url), 60000)
+      setErr(null)
+    } catch (e) {
+      tab?.close()
+      setErr(e instanceof Error ? e.message : 'failed')
+    }
+  }
+  return (
+    <>
+      <button type="button" className="link sm" onClick={open}>Open GET /v1/runs/{runId}/evidence ↗</button>
+      {err && <span className="muted sm"> — could not load ({err})</span>}
+    </>
   )
 }
 

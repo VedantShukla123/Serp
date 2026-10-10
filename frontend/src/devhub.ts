@@ -44,22 +44,54 @@ function psValue(v: unknown, indent: string): string {
   return psStr(String(v))
 }
 
-/** Runnable command for the local dev server. POST bodies are real JSON in both shells. */
+/** Every /v1 route except /v1/auth/* needs `Authorization: Bearer <token>` on a deployed server. */
+export function needsToken(path: string): boolean {
+  return path.startsWith('/v1/') && !path.startsWith('/v1/auth/')
+}
+/** Header lines the examples use; the token comes from loginExample() (a local dev server ignores it). */
+const BASH_AUTH = `-H "Authorization: Bearer $PROOFGATE_TOKEN"`
+const PS_AUTH = `-Headers @{ Authorization = "Bearer $env:PROOFGATE_TOKEN" }`
+const CURL_EXE_AUTH = `-H "Authorization: Bearer $env:PROOFGATE_TOKEN"`
+
+/** Runnable command. POST bodies are real JSON in both shells; protected routes send the token. */
 export function example(ex: Ex, shell: Shell): string {
   const url = API_BASE + ex.path
+  const auth = needsToken(ex.path)
   if (shell === 'bash') {
-    if (ex.stream) return `curl -N ${q(url)}`
-    if (ex.method === 'GET') return `curl -s ${q(url)}`
-    return `curl -s -X POST ${q(url)} \\\n  -H 'Content-Type: application/json' \\\n  -d ${q(JSON.stringify(ex.body ?? {}, null, 2))}`
+    const h = auth ? ` ${BASH_AUTH}` : ''
+    if (ex.stream) return `curl -N${h} ${q(url)}`
+    if (ex.method === 'GET') return `curl -s${h} ${q(url)}`
+    return `curl -s -X POST ${q(url)} \\\n${auth ? `  ${BASH_AUTH} \\\n` : ''}  -H 'Content-Type: application/json' \\\n  -d ${q(JSON.stringify(ex.body ?? {}, null, 2))}`
   }
   // Windows PowerShell 5.1: `curl` is an alias for Invoke-WebRequest and curl.exe strips
   // JSON quotes, so use Invoke-RestMethod + ConvertTo-Json (curl.exe only for SSE streams).
-  if (ex.stream) return `curl.exe -N ${psStr(url)}`
+  const h = auth ? ` ${PS_AUTH}` : ''
+  if (ex.stream) return `curl.exe -N${auth ? ` ${CURL_EXE_AUTH}` : ''} ${psStr(url)}`
   // PS 5.1 wraps JSON arrays as {value, Count} when converting back to JSON; show a table instead.
-  if (ex.table) return `(Invoke-RestMethod ${psStr(url)}) | Format-Table ${ex.table.join(', ')} -AutoSize`
+  if (ex.table) return `(Invoke-RestMethod ${psStr(url)}${h}) | Format-Table ${ex.table.join(', ')} -AutoSize`
   // -InputObject keeps JSON arrays as arrays (piping wraps them as {value, Count} in PS 5.1).
-  if (ex.method === 'GET') return `$res = Invoke-RestMethod ${psStr(url)}\nConvertTo-Json -Depth 10 -InputObject $res`
-  return `$body = ${psValue(ex.body ?? {}, '')} | ConvertTo-Json -Depth 10\n$res = Invoke-RestMethod -Method Post -Uri ${psStr(url)} \`\n  -ContentType "application/json" -Body $body\nConvertTo-Json -Depth 10 -InputObject $res`
+  if (ex.method === 'GET') return `$res = Invoke-RestMethod ${psStr(url)}${h}\nConvertTo-Json -Depth 10 -InputObject $res`
+  return `$body = ${psValue(ex.body ?? {}, '')} | ConvertTo-Json -Depth 10\n$res = Invoke-RestMethod -Method Post -Uri ${psStr(url)}${h} \`\n  -ContentType "application/json" -Body $body\nConvertTo-Json -Depth 10 -InputObject $res`
+}
+
+/** Demo sign-in: prompts for the shared demo password (never written into the command) and stores
+    the short-lived token from POST /v1/auth/login in PROOFGATE_TOKEN for the other examples. */
+export function loginExample(shell: Shell): string {
+  const url = API_BASE + '/v1/auth/login'
+  if (shell === 'bash') return [
+    `read -rsp 'Demo password: ' PG_PW; echo`,
+    `export PROOFGATE_TOKEN=$(PG_PW="$PG_PW" python -c 'import json,os; print(json.dumps({"password": os.environ["PG_PW"]}))' \\`,
+    `  | curl -s -X POST ${q(url)} -H 'Content-Type: application/json' -d @- \\`,
+    `  | python -c 'import json,sys; print(json.load(sys.stdin)["token"])')`,
+    `unset PG_PW`,
+  ].join('\n')
+  return [
+    `$pw = Read-Host 'Demo password' -AsSecureString`,
+    `$plain = [Runtime.InteropServices.Marshal]::PtrToStringAuto([Runtime.InteropServices.Marshal]::SecureStringToBSTR($pw))`,
+    `$env:PROOFGATE_TOKEN = (Invoke-RestMethod -Method Post -Uri ${psStr(url)} \``,
+    `  -ContentType "application/json" -Body (@{ password = $plain } | ConvertTo-Json)).token`,
+    `Remove-Variable plain, pw`,
+  ].join('\n')
 }
 
 /** The JSON a bash example sends (used by tests to prove the payload is valid). */

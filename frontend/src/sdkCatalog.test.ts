@@ -37,7 +37,7 @@ test('every available integration has a way to start; examples match the shell',
   assert.equal(rest('bash').code, "curl -s 'http://localhost:8000/health'")
   assert.match(INTEGRATIONS.find((i) => i.id === 'mcp')!.code!('powershell').code, /run_mcp\.py --check$/)
   const client = INTEGRATIONS.find((i) => i.id === 'pyclient')!.code!('bash').code
-  for (const m of ['health()', 'list_runs(limit=1)', 'get_run(latest)']) assert.ok(client.includes(m), m)
+  for (const m of ['health()', 'list_runs(limit=1)', 'get_run(runs[0]["run_id"])']) assert.ok(client.includes(m), m)
   const src = readFileSync(repo('proofgate_client/client.py'), 'utf-8')
   for (const fn of ['def health', 'def list_runs', 'def get_run', 'def get_evidence', 'def find_and_verify', 'def verify']) assert.ok(src.includes(fn), fn)
 })

@@ -8,6 +8,7 @@ import Playground from './Playground'
 import { BookContext, type BookTarget } from './Trace'
 import { useAgentChat } from './chat'
 import { API_BASE, API_ORIGIN, apiUrl } from './devhub'
+import { apiFetch, AUTH_REQUIRED_EVENT, authStatus, getToken, logout } from './api'
 import { go, parseRoute, type Route } from './route'
 
 type Health = { state: 'checking' | 'ready' | 'degraded' | 'offline'; detail: string }
@@ -19,7 +20,7 @@ async function checkHealth(): Promise<Health> {
     try {
       const ctl = new AbortController()
       const t = setTimeout(() => ctl.abort(), 4000)
-      const r = await fetch(url, { signal: ctl.signal })
+      const r = await apiFetch(url, { signal: ctl.signal })
       clearTimeout(t)
       if (!r.ok) continue
       const j = await r.json().catch(() => ({}))
@@ -47,12 +48,38 @@ const NAV = [
   { tab: 'developers', label: 'Developers', icon: <path d="M8.5 8L4.5 12l4 4M15.5 8l4 4-4 4M13.5 5.5l-3 13" /> },
 ] as const
 
+/** Workspace access: when the server requires the demo password and this tab has no
+    valid token, send the visitor to sign-in. Also returns there when a token expires. */
+function useAccessGate(inApp: boolean): boolean {
+  const [ok, setOk] = useState(() => !!getToken())
+  useEffect(() => {
+    const on = () => { setOk(false); go('/signin') }
+    window.addEventListener(AUTH_REQUIRED_EVENT, on)
+    return () => window.removeEventListener(AUTH_REQUIRED_EVENT, on)
+  }, [])
+  useEffect(() => {
+    if (!inApp) return
+    if (getToken()) { setOk(true); return }
+    let live = true
+    setOk(false)
+    authStatus().then((s) => {
+      if (!live) return
+      if (s?.auth_required) go('/signin')
+      else setOk(true)            // local dev (no sign-in) or backend offline — the app reports that itself
+    })
+    return () => { live = false }
+  }, [inApp])
+  return ok
+}
+
 export default function App() {
   const route = useRoute()
+  const allowed = useAccessGate(route.page === 'app')
   if (route.page === 'landing') return <Landing />
   if (route.page === 'signin') return <SignIn />
   if (route.page === 'signup') return <SignUp />
   if (route.page === 'forgot') return <Forgot />
+  if (!allowed) return <div className="auth-checking" role="status">Checking access…</div>
   return <AppShell tab={route.tab} sub={route.sub} arg={route.arg} />
 }
 
@@ -62,6 +89,7 @@ function AppShell({ tab, sub, arg }: { tab: 'assistant' | 'playground' | 'develo
   const playground = useAgentChat('proofgate.playground_session_id')
   const [bookTarget, setBookTarget] = useState<BookTarget | null>(null)
   const [health, setHealth] = useState<Health>({ state: 'checking', detail: 'checking…' })
+  const signedIn = !!getToken()
 
   useEffect(() => {
     let live = true
@@ -88,8 +116,8 @@ function AppShell({ tab, sub, arg }: { tab: 'assistant' | 'playground' | 'develo
             <span className={`api-dot ${health.state}`} title={health.detail}>
               <i />{health.state === 'ready' ? 'API ready' : health.state === 'degraded' ? health.detail : health.state === 'checking' ? 'checking…' : 'backend offline'}
             </span>
-            <span className="demo-pill" title="No authentication in this build">Demo workspace</span>
-            <button className="btn ghost sm" onClick={() => go('/')}>Exit</button>
+            <span className="demo-pill" title={signedIn ? 'Signed in with the shared demo password — not a personal account' : 'This server does not require sign-in'}>Demo workspace</span>
+            <button className="btn ghost sm" onClick={async () => { if (signedIn) await logout(); go('/') }}>{signedIn ? 'Sign out' : 'Exit'}</button>
           </div>
         </header>
         <main className="shell-main" key={tab}>

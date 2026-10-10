@@ -3,7 +3,7 @@ import Composer from './Composer'
 import { EXAMPLES } from './Assistant'
 import { BookButton, TraceView, VerdictPill } from './Trace'
 import type { ChatMsg, useAgentChat } from './chat'
-import { apiUrl } from './devhub'
+import { apiFetch } from './api'
 import { buildCards, journey, priceLabel, summarize, type CandidateCard, type Cond } from './playgroundView'
 
 /* Playground: one request → one clear decision. Every status, count and reason below is
@@ -58,7 +58,7 @@ export default function Playground({ chat }: { chat: ReturnType<typeof useAgentC
 
   useEffect(() => {
     const ctl = new AbortController()
-    fetch(apiUrl('/v1/runs?limit=10'), { signal: ctl.signal }).then((r) => (r.ok ? r.json() : [])).then((rows) => {
+    apiFetch('/v1/runs?limit=10', { signal: ctl.signal }).then((r) => (r.ok ? r.json() : [])).then((rows) => {
       if (Array.isArray(rows)) { setStored(rows); if (rows[0]) setReplayId(rows[0].run_id) }
     }).catch(() => setStored([]))
     return () => ctl.abort()
@@ -89,7 +89,7 @@ export default function Playground({ chat }: { chat: ReturnType<typeof useAgentC
   function replay() {
     if (!replayId || replaying || sending) return
     setReplaying(true); setReplayErr(null)
-    fetch(apiUrl(`/v1/runs/${encodeURIComponent(replayId)}`))
+    apiFetch(`/v1/runs/${encodeURIComponent(replayId)}`)
       .then((r) => (r.ok ? r.json() : Promise.reject(new Error(r.status === 404 ? 'run not found' : `HTTP ${r.status}`))))
       .then((doc) => { setPick(null); loadReplay(doc) })
       .catch((e: Error) => setReplayErr(`Could not load that run (${e.message}).`))

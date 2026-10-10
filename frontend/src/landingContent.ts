@@ -1,6 +1,8 @@
 /* Landing page content + destinations (no React) — unit-tested.
-   Illustrative data is taken from stored run c28bb2b65036 (Goa hotel search) and is
-   labelled as such on the page; nothing here is presented as a live operation. */
+   Illustrative data is copied from a recorded development run (c28bb2b65036, Goa hotel search)
+   and labelled as a recorded example; nothing here is presented as a live operation. That run
+   is NOT on a fresh deployment, so no link points at it — the Trace Inspector opens the newest
+   run that actually exists, or an empty state with a way to run a search. */
 
 export const DEMO_RUN = 'c28bb2b65036'
 
@@ -13,7 +15,7 @@ export const LINKS = {
   navGetStarted: '/signup',
   heroPrimary: '/app/playground',
   heroSecondary: 'scroll:how',
-  previewRun: `/app/developers/trace/${DEMO_RUN}`,
+  previewRun: '/app/developers/trace',
   devRest: '/app/developers/api',
   devStream: '/app/developers/api/get-v1-agent-chat-stream',
   devMcp: '/app/developers/mcp',
