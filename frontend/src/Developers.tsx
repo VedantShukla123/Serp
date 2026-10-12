@@ -2,8 +2,8 @@ import { useCallback, useEffect, useRef, useState, type KeyboardEvent, type Reac
 import { go } from './route'
 import { VerdictPill } from './Trace'
 import {
-  API_BASE, AVAIL, checkRunId, describeError, example, initialRun, loginExample, latestGuard, missingStatus, RUN_STATUS_TEXT, RUNS_PAGE, shortId, statusCounts, traceRows,
-  type Avail, type LoadError, type Shell, type StoredRunDoc, type TraceRow,
+  API_BASE, checkRunId, describeError, example, healthView, initialRun, loginExample, latestGuard, missingStatus, RUN_STATUS_TEXT, runDecision, RUNS_PAGE, shortId, shortTime, statusCounts, traceRows,
+  type HealthView, type LoadError, type Shell, type StoredRunDoc, type TraceRow,
 } from './devhub'
 import { apiFetch } from './api'
 import { COST, epKey, filterGroups, GROUPS, PLACEHOLDER_IDS, type Cost, type ExampleIds } from './apiCatalog'
@@ -23,11 +23,6 @@ const TABS: { id: Tab; label: string }[] = [
 ]
 
 /* ---------------------------------------------------------------- shared bits */
-
-export function AvailBadge({ kind }: { kind: Avail }) {
-  const a = AVAIL[kind]
-  return <span className={`avail ${a.tone}`} title={a.meaning}><span aria-hidden>{a.icon}</span>{a.label}</span>
-}
 
 async function copyText(text: string): Promise<boolean> {
   try {
@@ -150,14 +145,8 @@ export default function Developers({ sub, arg }: { sub: string | null; arg: stri
     <div className="page-scroll" ref={scrollRef}>
       <div className="pg-page devs dev2 enter">
         <header className="dev-head">
-          <div>
-            <span className="eyebrow">Developers</span>
-            <h1>Build with ProofGate</h1>
-            <p className="muted">Verify an AI agent’s proposed action against requirements and evidence before allowing it to proceed.</p>
-          </div>
-          <a className="btn secondary sm" href={`${API_BASE}/docs`} target="_blank" rel="noreferrer" title="Interactive API docs served by your local backend (localhost:8000)">
-            Local API docs ↗
-          </a>
+          <h1>Build with ProofGate</h1>
+          <p className="muted">Verify AI agent actions against requirements and evidence before they proceed.</p>
         </header>
 
         <div className="tabs" role="tablist" aria-label="Developer sections">
@@ -183,104 +172,119 @@ export default function Developers({ sub, arg }: { sub: string | null; arg: stri
 
 /* ---------------------------------------------------------------- overview */
 
-const FLOW = ['Action', 'Requirements', 'Evidence', 'Jev', 'Decision', 'Human review']
+const FLOW = ['Action', 'Requirements', 'Evidence', 'Verification', 'Decision']
 
-const CAPABILITIES: { name: string; kind: Avail; what: string; to: Tab; sub?: string; code?: string }[] = [
-  { name: 'REST API', kind: 'now', what: 'Verify requests, read runs and evidence over HTTP.', to: 'api' },
-  { name: 'SSE trace', kind: 'now', what: 'Stream every pipeline step as it happens.', to: 'api', sub: 'get-v1-agent-chat-stream' },
-  { name: 'MCP server (stdio)', kind: 'now', what: 'Four tools for MCP hosts via run_mcp.py; tested.', to: 'mcp' },
-  { name: 'CLI (run.py)', kind: 'inproc', what: 'Run a verification from a local checkout.', to: 'sdks' },
-  { name: 'Action simulator', kind: 'demo', what: 'Simulated hotel bookings and product orders only.', to: 'api', sub: 'get-v1-runs-run-id-candidates-candidate-id-action-context' },
-  { name: 'Python adapter', kind: 'inproc', what: 'The same four functions, imported from this repo.', to: 'mcp' },
-  { name: 'Python client', kind: 'inproc', what: 'proofgate_client — available locally, not published. TypeScript SDK not built yet.', to: 'sdks', code: 'from proofgate_client import ProofGateClient' },
-  { name: 'API authentication', kind: 'none', what: 'The local server accepts every request.', to: 'api' },
-]
+type Health = { s: 'loading' } | { s: 'done'; view: HealthView }
+type LatestRun = { run_id: string; request: string; created_at?: string; status: string | null }
+type Latest = { s: 'loading' } | { s: 'empty' } | { s: 'error'; detail: string } | { s: 'ok'; run: LatestRun }
 
-type Health = { s: 'idle' | 'loading' } | { s: 'ok'; ready: boolean; missing: string[] } | { s: 'error'; err: LoadError }
+/** GET /health — the real backend answer (public endpoint). */
+function useHealth(): [Health, () => void] {
+  const [health, setHealth] = useState<Health>({ s: 'loading' })
+  const guard = useRef(latestGuard())
+  const check = useCallback(() => {
+    const token = guard.current.next()
+    setHealth({ s: 'loading' })
+    getJson<{ ready?: unknown; missing_credentials?: unknown }>('/health', new AbortController().signal, 8000)
+      .then((json) => healthView({ ok: true, json }))
+      .catch((e) => healthView({ ok: false, status: (e as { status?: number })?.status, timeout: e instanceof DOMException && e.name === 'AbortError' }))
+      .then((view) => { if (guard.current.isCurrent(token)) setHealth({ s: 'done', view }) })
+  }, [])
+  useEffect(() => { check() }, [check])
+  return [health, check]
+}
+
+/** The signed-in account's most recent run (GET /v1/runs is scoped to the caller by the API). */
+function useLatestRun(): [Latest, () => void] {
+  const [latest, setLatest] = useState<Latest>({ s: 'loading' })
+  const [nonce, setNonce] = useState(0)
+  useEffect(() => {
+    const ctl = new AbortController()
+    setLatest({ s: 'loading' })
+    ;(async () => {
+      try {
+        const rows = await getJson<{ run_id: string; request: string; created_at?: string }[]>('/v1/runs?limit=1', ctl.signal)
+        const row = Array.isArray(rows) ? rows[0] : undefined
+        if (!row) { if (!ctl.signal.aborted) setLatest({ s: 'empty' }); return }
+        const doc = await getJson<{ status?: string }>(`/v1/runs/${encodeURIComponent(row.run_id)}`, ctl.signal).catch(() => null)
+        if (!ctl.signal.aborted) setLatest({ s: 'ok', run: { ...row, status: doc?.status ?? null } })
+      } catch (e) {
+        if (ctl.signal.aborted) return
+        const status = (e as { status?: number })?.status
+        setLatest({ s: 'error', detail: status ? `The API answered with an error (HTTP ${status}).` : 'The API could not be reached.' })
+      }
+    })()
+    return () => ctl.abort()
+  }, [nonce])
+  return [latest, () => setNonce((n) => n + 1)]
+}
 
 function Overview() {
-  const ids = useExampleIds()
-  const [health, setHealth] = useState<Health>({ s: 'idle' })
-  const latest = ids.latestRun
-
-  function checkHealth() {
-    setHealth({ s: 'loading' })
-    getJson<{ ready?: boolean; missing_credentials?: string[] }>(`${API_BASE}/health`, new AbortController().signal, 6000)
-      .then((j) => setHealth({ s: 'ok', ready: j.ready === true, missing: Array.isArray(j.missing_credentials) ? j.missing_credentials : [] }))
-      .catch((e) => setHealth({ s: 'error', err: describeError(e, (e as { status?: number })?.status) }))
-  }
+  const [health, checkHealth] = useHealth()
+  const [latest, reloadLatest] = useLatestRun()
+  const decision = latest.s === 'ok' ? runDecision(latest.run.status) : null
 
   return (
     <div className="ov">
-      <ol className="flow-line" aria-label="How ProofGate decides">
-        {FLOW.map((s, i) => <li key={s} className={i === FLOW.length - 1 ? 'opt' : ''}>{s}{i === FLOW.length - 1 && <small> when needed</small>}</li>)}
-      </ol>
+      <div className="flow-wrap">
+        <ol className="flow-line" aria-label="How ProofGate decides">
+          {FLOW.map((s) => <li key={s}>{s}</li>)}
+        </ol>
+        <span className="flow-note">Human review when needed</span>
+      </div>
 
       <div className="qa-grid">
-        <section className="card pad qa">
-          <div className="qa-head"><h2 className="h3">Check API health</h2><span className="cost ok">Free · no search</span></div>
-          <p className="muted sm">Calls <code>GET /health</code> on your local server.</p>
-          <div className="qa-result" aria-live="polite">
-            {health.s === 'idle' && <span className="muted sm">Not checked yet.</span>}
-            {health.s === 'loading' && <span className="sm"><span className="spinner xs" /> Checking…</span>}
-            {health.s === 'ok' && (health.ready
-              ? <span className="hc ok">● Ready — all API keys configured</span>
-              : <span className="hc warn">● Running, but missing: {health.missing.join(', ') || 'credentials'}</span>)}
-            {health.s === 'error' && <span className="hc bad">● {health.err.title}. {health.err.detail}</span>}
+        <section className="card pad qa" aria-labelledby="qa-health">
+          <h2 className="h3" id="qa-health">API status</h2>
+          <div className="qa-body" aria-live="polite">
+            {health.s === 'loading'
+              ? <p className="qa-state"><span className="spinner xs" /> Checking…</p>
+              : <>
+                  <p className={`qa-state ${health.view.tone}`}><span className="qa-dot" aria-hidden />{health.view.title}</p>
+                  <p className="qa-detail">{health.view.detail}</p>
+                </>}
           </div>
           <div className="qa-actions">
-            <button className="btn primary sm" onClick={checkHealth} disabled={health.s === 'loading'}>Check now</button>
-            <a className="link sm" href={`${API_BASE}/health`} target="_blank" rel="noreferrer">Open /health ↗</a>
+            <button className="btn secondary sm" onClick={checkHealth} disabled={health.s === 'loading'}>{health.s === 'loading' ? 'Checking…' : 'Check again'}</button>
           </div>
         </section>
 
-        <section className="card pad qa">
-          <div className="qa-head"><h2 className="h3">Inspect a stored run</h2><span className="cost ok">Free · no search</span></div>
-          <p className="muted sm">See requirements, Jev verdicts and evidence for a past run.</p>
-          <div className="qa-result">
-            {latest ? (
-              <span className="qa-latest">
-                <span className="qa-req" title={latest.request}>{latest.request}</span>
-                <span className="qa-meta">
-                  {latest.status && <span className={`rl-status ${latest.status}`}>{latest.status.replace(/_/g, ' ')}</span>}
-                  {latest.created_at && <time dateTime={latest.created_at}>{new Date(latest.created_at).toLocaleString()}</time>}
-                </span>
-                <span className="qa-id">Run <code title={latest.run_id}>{latest.run_id}</code><CopyButton text={latest.run_id} label="Copy ID" /></span>
-              </span>
-            ) : <span className="muted sm">{ids.loaded ? 'No stored runs yet.' : 'Looking for runs…'}</span>}
+        <section className="card pad qa" aria-labelledby="qa-latest">
+          <h2 className="h3" id="qa-latest">Your latest verification</h2>
+          <div className="qa-body">
+            {latest.s === 'loading' && <p className="qa-state"><span className="spinner xs" /> Loading…</p>}
+            {latest.s === 'empty' && <p className="qa-detail">You haven’t run a verification yet. Start one in the Playground and it will appear here.</p>}
+            {latest.s === 'error' && <><p className="qa-state bad"><span className="qa-dot" aria-hidden />Couldn’t load your runs</p><p className="qa-detail">{latest.detail}</p></>}
+            {latest.s === 'ok' && decision && (
+              <>
+                <p className="qa-req" title={latest.run.request}>{latest.run.request}</p>
+                <p className="qa-meta">
+                  <span className={`qa-pill ${decision.tone}`}>{decision.label}</span>
+                  {shortTime(latest.run.created_at) && <time dateTime={latest.run.created_at} title={new Date(latest.run.created_at!).toLocaleString()}>{shortTime(latest.run.created_at)}</time>}
+                </p>
+              </>
+            )}
           </div>
           <div className="qa-actions">
-            <button className="btn primary sm" onClick={() => go(latest ? `/app/developers/trace/${encodeURIComponent(latest.run_id)}` : '/app/developers/trace')}>
-              {latest ? 'Open latest run' : 'Open Trace inspector'}
-            </button>
-            {latest && <button className="link sm" onClick={() => go('/app/developers/trace')}>All runs</button>}
+            {latest.s === 'ok' && <>
+              <button className="btn primary sm" onClick={() => go(`/app/developers/trace/${encodeURIComponent(latest.run.run_id)}`)}>Open latest run</button>
+              <button className="link sm" onClick={() => go('/app/developers/trace')}>View all runs</button>
+            </>}
+            {latest.s === 'empty' && <button className="btn secondary sm" onClick={() => go('/app/playground')}>Go to Playground</button>}
+            {latest.s === 'error' && <button className="btn secondary sm" onClick={reloadLatest}>Try again</button>}
           </div>
         </section>
 
-        <section className="card pad qa">
-          <div className="qa-head"><h2 className="h3">Run a verification</h2><span className="cost warn">Uses API credits</span></div>
-          <p className="muted sm"><code>POST /v1/find-and-verify</code> searches live and asks Jev to rule on each requirement.</p>
-          <div className="qa-result"><span className="sm">Nothing runs from here — you copy the request and run it yourself.</span></div>
+        <section className="card pad qa" aria-labelledby="qa-start">
+          <h2 className="h3" id="qa-start">Start a verification</h2>
+          <div className="qa-body">
+            <p className="qa-detail">Describe an action and its must-haves; ProofGate checks each one against live evidence before anything proceeds.</p>
+          </div>
           <div className="qa-actions">
-            <button className="btn secondary sm" onClick={() => go('/app/developers/api/post-v1-find-and-verify')}>View the request</button>
+            <button className="btn primary sm" onClick={() => go('/app/playground')}>Open Playground</button>
           </div>
         </section>
       </div>
-
-      <section className="card pad caps">
-        <div className="card-head"><h2 className="h3">What’s available</h2><span className="muted sm">Status in this repository today</span></div>
-        <ul className="cap-grid">
-          {CAPABILITIES.map((c) => (
-            <li key={c.name}>
-              <button onClick={() => go(`/app/developers/${c.to}${c.sub ? '/' + c.sub : ''}`)} aria-label={`${c.name}: ${AVAIL[c.kind].label}. ${c.what}`}>
-                <span className="cap-top"><b>{c.name}</b><AvailBadge kind={c.kind} /></span>
-                <small>{c.what}</small>
-                {c.code && <code className="cap-code">{c.code}</code>}
-              </button>
-            </li>
-          ))}
-        </ul>
-      </section>
     </div>
   )
 }
@@ -289,16 +293,12 @@ function Overview() {
 
 /** Real local run IDs so copied examples work: hotel endpoints get a hotel run, order endpoints a product run,
  *  each with that run's own selected candidate. Free local reads only; placeholders if none exist. */
-type LatestRun = { run_id: string; request: string; created_at?: string; status: string | null }
-
-function useExampleIds(): ExampleIds & { latestRun: LatestRun | null; loaded: boolean } {
-  const [state, setState] = useState<{ ids: ExampleIds; latestRun: LatestRun | null; loaded: boolean }>(
-    { ids: PLACEHOLDER_IDS, latestRun: null, loaded: false })
+function useExampleIds(): ExampleIds {
+  const [ids, setIds] = useState<ExampleIds>(PLACEHOLDER_IDS)
   useEffect(() => {
     const ctl = new AbortController()
     ;(async () => {
       const rows = await getJson<{ run_id: string; request: string; created_at?: string }[]>('/v1/runs?limit=15', ctl.signal).catch(() => [])
-      let latestStatus: string | null = null
       const ids = { ...PLACEHOLDER_IDS }
       if (rows[0]) ids.anyRun = rows[0].run_id
       let needHotel = true, needProduct = true
@@ -306,17 +306,16 @@ function useExampleIds(): ExampleIds & { latestRun: LatestRun | null; loaded: bo
         if (!needHotel && !needProduct) break
         const doc = await getJson<{ status?: string; target_type?: string; selected_candidate?: { candidate_id?: string } | null; candidates?: { candidate_id: string }[] }>(
           `/v1/runs/${encodeURIComponent(r.run_id)}`, ctl.signal).catch(() => null)
-        if (r === rows[0]) latestStatus = doc?.status ?? null      // real status, from the run details
         const cand = doc?.selected_candidate?.candidate_id ?? doc?.candidates?.[0]?.candidate_id
         if (!doc || !cand) continue
         if (needHotel && doc.target_type === 'hotel') { ids.hotelRun = r.run_id; ids.hotelCand = cand; needHotel = false }
         if (needProduct && doc.target_type === 'product') { ids.productRun = r.run_id; ids.productCand = cand; needProduct = false }
       }
-      if (!ctl.signal.aborted) setState({ ids, latestRun: rows[0] ? { ...rows[0], status: latestStatus } : null, loaded: true })
+      if (!ctl.signal.aborted) setIds(ids)
     })()
     return () => ctl.abort()
   }, [])
-  return { ...state.ids, latestRun: state.latestRun, loaded: state.loaded }
+  return ids
 }
 
 function RestApi({ shell, setShell, openKey }: { shell: Shell; setShell: (s: Shell) => void; openKey: string | null }) {

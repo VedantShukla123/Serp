@@ -2,7 +2,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 
-import { bashPayload, checkRunId, describeError, example, latestGuard, loginExample, statusCounts, traceRows } from './devhub.ts'
+import { bashPayload, checkRunId, describeError, example, healthView, latestGuard, loginExample, runDecision, shortTime, statusCounts, traceRows } from './devhub.ts'
 
 const FIND = { method: 'POST' as const, path: '/v1/find-and-verify', body: { request: "Hotel in Goa, sea view, it's fine", action: 'book_hotel', max_candidates: 5 } }
 
@@ -133,4 +133,33 @@ test('API location: same-origin by default, VITE_API_BASE_URL-style origin when 
   assert.equal(apiUrl('/v1/runs'), '/v1/runs')
   assert.equal(apiUrl('/v1/runs', 'https://api.example.com/'), 'https://api.example.com/v1/runs')
   assert.equal(apiUrl('/health', 'https://api.example.com'), 'https://api.example.com/health')
+})
+
+test('overview health reflects the real /health answer', () => {
+  assert.deepEqual(healthView({ ok: true, json: { ready: true, missing_credentials: [] } }).title, 'Healthy')
+  const notReady = healthView({ ok: true, json: { ready: false, missing_credentials: ['SERPAPI_API_KEY'] } })
+  assert.equal(notReady.tone, 'warn'); assert.match(notReady.detail, /SERPAPI_API_KEY/)
+  assert.equal(healthView({ ok: true, json: {} }).tone, 'warn')            // "ready" missing is never treated as healthy
+  assert.match(healthView({ ok: false, status: 503 }).detail, /HTTP 503/)
+  assert.equal(healthView({ ok: false }).title, 'Unavailable')
+  assert.match(healthView({ ok: false, timeout: true }).detail, /in time/)
+})
+
+test('run decision labels never overstate a run', () => {
+  assert.deepEqual(runDecision('verified'), { label: 'Verified', tone: 'ok' })
+  assert.equal(runDecision('needs_human_review').label, 'Needs human review')
+  assert.equal(runDecision('no_verified_match').label, 'No verified match')
+  assert.equal(runDecision(null).label, 'Status unavailable')
+  assert.notEqual(runDecision('something_new').tone, 'ok')
+})
+
+test('short timestamps', () => {
+  const now = Date.parse('2026-10-12T12:00:00Z')
+  assert.equal(shortTime('2026-10-12T11:59:40Z', now), 'just now')
+  assert.equal(shortTime('2026-10-12T11:15:00Z', now), '45 min ago')
+  assert.equal(shortTime('2026-10-12T07:00:00Z', now), '5 h ago')
+  assert.equal(shortTime('2026-10-11T10:00:00Z', now), 'yesterday')
+  assert.match(shortTime('2026-09-01T10:00:00Z', now), /2026/)
+  assert.equal(shortTime('not a date', now), '')
+  assert.equal(shortTime(null, now), '')
 })

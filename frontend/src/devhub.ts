@@ -207,3 +207,42 @@ export function initialRun(selected: string | null, rows: { run_id: string }[]):
 export function missingStatus(rows: { run_id: string }[], shown: number, known: Record<string, unknown>): string[] {
   return rows.slice(0, shown).map((r) => r.run_id).filter((id) => !(id in known))
 }
+
+/* ---------- Overview helpers ---------- */
+export type HealthView = { tone: 'ok' | 'warn' | 'bad'; title: string; detail: string }
+
+/** GET /health result -> what the Overview shows. `status` is the HTTP status when the request failed. */
+export function healthView(r: { ok: true; json: { ready?: unknown; missing_credentials?: unknown } } | { ok: false; status?: number; timeout?: boolean }): HealthView {
+  if (!r.ok) {
+    if (r.timeout) return { tone: 'bad', title: 'Unavailable', detail: 'The API did not answer in time. Try again in a moment.' }
+    if (r.status) return { tone: 'bad', title: 'Unavailable', detail: `The API answered with an error (HTTP ${r.status}).` }
+    return { tone: 'bad', title: 'Unavailable', detail: 'The API could not be reached. Check your connection or try again shortly.' }
+  }
+  if (r.json.ready === true) return { tone: 'ok', title: 'Healthy', detail: 'The API is up and ready to verify requests.' }
+  const missing = Array.isArray(r.json.missing_credentials) ? r.json.missing_credentials.map(String) : []
+  return { tone: 'warn', title: 'Running, not ready', detail: `Live searches are unavailable until the server has ${missing.length ? missing.join(' and ') : 'its provider keys'} configured.` }
+}
+
+/** A stored run's decision as people read it (never "Verified" unless the run says so). */
+export function runDecision(status: string | null | undefined): { label: string; tone: 'ok' | 'warn' | 'bad' | 'neutral' } {
+  switch (status) {
+    case 'verified': return { label: 'Verified', tone: 'ok' }
+    case 'needs_human_review': return { label: 'Needs human review', tone: 'warn' }
+    case 'no_verified_match': return { label: 'No verified match', tone: 'bad' }
+    case 'error': return { label: 'Failed', tone: 'bad' }
+    case 'direct': return { label: 'Answered directly', tone: 'neutral' }
+    default: return { label: 'Status unavailable', tone: 'neutral' }
+  }
+}
+
+/** Concise time: "just now", "5 min ago", "3 h ago", "yesterday", else a short date. '' if unparseable. */
+export function shortTime(iso: string | null | undefined, now: number = Date.now()): string {
+  const t = iso ? Date.parse(iso) : NaN
+  if (Number.isNaN(t)) return ''
+  const min = Math.floor((now - t) / 60000)
+  if (min < 1) return 'just now'
+  if (min < 60) return `${min} min ago`
+  if (min < 24 * 60) return `${Math.floor(min / 60)} h ago`
+  if (min < 48 * 60) return 'yesterday'
+  return new Date(t).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' })
+}
