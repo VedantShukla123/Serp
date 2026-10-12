@@ -3,6 +3,7 @@ import assert from 'node:assert/strict'
 import { test } from 'node:test'
 
 import { PASSWORD_MAX, PASSWORD_MIN, validateSignIn, validateSignUp } from './authForms.ts'
+import { initialOf, profileView } from './profile.ts'
 import { parseRoute } from './route.ts'
 import { getRecognitionCtor, mergeTranscript, speechErrorMessage } from './speech.ts'
 import { pipelineStages } from './traceEvents.ts'
@@ -100,4 +101,26 @@ test('replay: stored run maps to a trace by candidate_id with no invented status
   assert.equal(t.candidateCount, 3)
   // c3 was never checked: no verdict is created for it
   assert.equal(t.verdicts.find((v) => v.candidate_id === 'c3'), undefined)
+})
+
+test('profile menu shows the signed-in account exactly as returned by /v1/auth/me', () => {
+  const u = { user_id: 'u1', name: '  Ada Lovelace ', email: 'ada@example.test' }
+  const v = profileView(u, 'ready')
+  assert.deepEqual(v, { initial: 'A', name: 'Ada Lovelace', email: 'ada@example.test', note: null, busy: false })
+  // A stored profile stays visible if a later refresh fails.
+  assert.equal(profileView(u, 'error').email, 'ada@example.test')
+  // No name: fall back to the email, never to invented text.
+  const noName = profileView({ user_id: 'u2', name: '', email: 'bob@example.test' }, 'ready')
+  assert.equal(noName.name, 'bob@example.test'); assert.equal(noName.initial, 'B')
+})
+
+test('profile menu loading and error states reveal nothing personal', () => {
+  const loading = profileView(null, 'loading')
+  assert.equal(loading.busy, true); assert.equal(loading.email, '')
+  const err = profileView(null, 'error')
+  assert.equal(err.busy, false); assert.equal(err.email, ''); assert.equal(err.name, 'Your account')
+  assert.match(err.note ?? '', /couldn’t be loaded/)
+  assert.doesNotMatch(JSON.stringify(err), /token|bearer|secret/i)
+  assert.equal(initialOf(null), '?')
+  assert.equal(initialOf({ name: ' ', email: '' }), '?')
 })

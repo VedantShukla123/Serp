@@ -144,7 +144,7 @@ export default function Developers({ sub, arg }: { sub: string | null; arg: stri
   return (
     <div className="page-scroll" ref={scrollRef}>
       <div className="pg-page devs dev2 enter">
-        <header className="dev-head">
+        <header className={'dev-head' + (tab === 'overview' ? ' dev-hero' : '')}>
           <h1>Build with ProofGate</h1>
           <p className="muted">Verify AI agent actions against requirements and evidence before they proceed.</p>
         </header>
@@ -219,53 +219,82 @@ function useLatestRun(): [Latest, () => void] {
   return [latest, () => setNonce((n) => n + 1)]
 }
 
+/** Adds `.in` once to each [data-rv] section as it scrolls into view (same motion as the landing page).
+    Without IntersectionObserver, or with reduced motion, everything is shown immediately. */
+function useReveal(root: React.RefObject<HTMLElement>) {
+  useEffect(() => {
+    const els = Array.from(root.current?.querySelectorAll<HTMLElement>('[data-rv]') ?? [])
+    const reduce = !!window.matchMedia?.('(prefers-reduced-motion: reduce)').matches
+    if (reduce || typeof IntersectionObserver === 'undefined') { els.forEach((e) => e.classList.add('in')); return }
+    const io = new IntersectionObserver((entries) => {
+      for (const en of entries) if (en.isIntersecting) { en.target.classList.add('in'); io.unobserve(en.target) }
+    }, { rootMargin: '0px 0px -8% 0px', threshold: 0.12 })
+    els.forEach((e) => io.observe(e))
+    return () => io.disconnect()
+  }, [root])
+}
+
 function Overview() {
   const [health, checkHealth] = useHealth()
   const [latest, reloadLatest] = useLatestRun()
   const decision = latest.s === 'ok' ? runDecision(latest.run.status) : null
+  const root = useRef<HTMLDivElement>(null)
+  useReveal(root)
 
   return (
-    <div className="ov">
-      <div className="flow-wrap">
-        <ol className="flow-line" aria-label="How ProofGate decides">
-          {FLOW.map((s) => <li key={s}>{s}</li>)}
-        </ol>
-        <span className="flow-note">Human review when needed</span>
-      </div>
+    <div className="ov" ref={root}>
+      <section className="ov-sec" data-rv aria-labelledby="ov-flow">
+        <div className="ov-intro">
+          <h2 id="ov-flow">How ProofGate decides</h2>
+          <p>Every proposed action goes through the same five steps before it can proceed.</p>
+        </div>
+        <div className="ov-main">
+          <ol className="ov-flow">
+            {FLOW.map((s, i) => (
+              <li key={s} style={{ '--i': i } as React.CSSProperties}><span className="ov-flow-dot" aria-hidden>{i + 1}</span>{s}</li>
+            ))}
+          </ol>
+          <p className="ov-note">Human review when needed</p>
+        </div>
+      </section>
 
-      <div className="qa-grid">
-        <section className="card pad qa" aria-labelledby="qa-health">
-          <h2 className="h3" id="qa-health">API status</h2>
-          <div className="qa-body" aria-live="polite">
-            {health.s === 'loading'
-              ? <p className="qa-state"><span className="spinner xs" /> Checking…</p>
-              : <>
-                  <p className={`qa-state ${health.view.tone}`}><span className="qa-dot" aria-hidden />{health.view.title}</p>
-                  <p className="qa-detail">{health.view.detail}</p>
-                </>}
-          </div>
-          <div className="qa-actions">
+      <section className="ov-sec" data-rv aria-labelledby="ov-health">
+        <div className="ov-intro">
+          <h2 id="ov-health">API status</h2>
+          <p>The live answer from the server’s health check.</p>
+        </div>
+        <div className="ov-main ov-panel" aria-live="polite">
+          {health.s === 'loading'
+            ? <p className="ov-state"><span className="spinner xs" /> Checking…</p>
+            : <>
+                <p className={`ov-state ${health.view.tone}`}><span className="ov-dot" aria-hidden />{health.view.title}</p>
+                <p className="ov-detail">{health.view.detail}</p>
+              </>}
+          <div className="ov-actions">
             <button className="btn secondary sm" onClick={checkHealth} disabled={health.s === 'loading'}>{health.s === 'loading' ? 'Checking…' : 'Check again'}</button>
           </div>
-        </section>
+        </div>
+      </section>
 
-        <section className="card pad qa" aria-labelledby="qa-latest">
-          <h2 className="h3" id="qa-latest">Your latest verification</h2>
-          <div className="qa-body">
-            {latest.s === 'loading' && <p className="qa-state"><span className="spinner xs" /> Loading…</p>}
-            {latest.s === 'empty' && <p className="qa-detail">You haven’t run a verification yet. Start one in the Playground and it will appear here.</p>}
-            {latest.s === 'error' && <><p className="qa-state bad"><span className="qa-dot" aria-hidden />Couldn’t load your runs</p><p className="qa-detail">{latest.detail}</p></>}
-            {latest.s === 'ok' && decision && (
-              <>
-                <p className="qa-req" title={latest.run.request}>{latest.run.request}</p>
-                <p className="qa-meta">
-                  <span className={`qa-pill ${decision.tone}`}>{decision.label}</span>
-                  {shortTime(latest.run.created_at) && <time dateTime={latest.run.created_at} title={new Date(latest.run.created_at!).toLocaleString()}>{shortTime(latest.run.created_at)}</time>}
-                </p>
-              </>
-            )}
-          </div>
-          <div className="qa-actions">
+      <section className="ov-sec" data-rv aria-labelledby="ov-latest">
+        <div className="ov-intro">
+          <h2 id="ov-latest">Your latest verification</h2>
+          <p>The most recent run on your account, with its decision.</p>
+        </div>
+        <div className="ov-main ov-panel">
+          {latest.s === 'loading' && <p className="ov-state"><span className="spinner xs" /> Loading…</p>}
+          {latest.s === 'empty' && <p className="ov-detail">You haven’t run a verification yet. Start one in the Playground and it will appear here.</p>}
+          {latest.s === 'error' && <><p className="ov-state bad"><span className="ov-dot" aria-hidden />Couldn’t load your runs</p><p className="ov-detail">{latest.detail}</p></>}
+          {latest.s === 'ok' && decision && (
+            <>
+              <p className="ov-req" title={latest.run.request}>{latest.run.request}</p>
+              <p className="ov-meta">
+                <span className={`ov-pill ${decision.tone}`}>{decision.label}</span>
+                {shortTime(latest.run.created_at) && <time dateTime={latest.run.created_at} title={new Date(latest.run.created_at!).toLocaleString()}>{shortTime(latest.run.created_at)}</time>}
+              </p>
+            </>
+          )}
+          <div className="ov-actions">
             {latest.s === 'ok' && <>
               <button className="btn primary sm" onClick={() => go(`/app/developers/trace/${encodeURIComponent(latest.run.run_id)}`)}>Open latest run</button>
               <button className="link sm" onClick={() => go('/app/developers/trace')}>View all runs</button>
@@ -273,18 +302,14 @@ function Overview() {
             {latest.s === 'empty' && <button className="btn secondary sm" onClick={() => go('/app/playground')}>Go to Playground</button>}
             {latest.s === 'error' && <button className="btn secondary sm" onClick={reloadLatest}>Try again</button>}
           </div>
-        </section>
+        </div>
+      </section>
 
-        <section className="card pad qa" aria-labelledby="qa-start">
-          <h2 className="h3" id="qa-start">Start a verification</h2>
-          <div className="qa-body">
-            <p className="qa-detail">Describe an action and its must-haves; ProofGate checks each one against live evidence before anything proceeds.</p>
-          </div>
-          <div className="qa-actions">
-            <button className="btn primary sm" onClick={() => go('/app/playground')}>Open Playground</button>
-          </div>
-        </section>
-      </div>
+      <section className="ov-sec ov-cta" data-rv aria-labelledby="ov-start">
+        <h2 id="ov-start">Start a verification</h2>
+        <p>Describe an action and its must-haves. ProofGate checks each one against live evidence and tells you what can safely proceed.</p>
+        <button className="btn primary" onClick={() => go('/app/playground')}>Open Playground</button>
+      </section>
     </div>
   )
 }

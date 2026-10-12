@@ -5,6 +5,8 @@ import ActionSimulator from './ActionSimulator'
 import Developers from './Developers'
 import Landing, { Logo } from './Landing'
 import Playground from './Playground'
+import ProfileMenu from './ProfileMenu'
+import type { ProfileStatus } from './profile'
 import { BookContext, type BookTarget } from './Trace'
 import { useAgentChat } from './chat'
 import { API_BASE, API_ORIGIN, apiUrl } from './devhub'
@@ -93,8 +95,12 @@ function AppShell({ tab, sub, arg }: { tab: 'assistant' | 'playground' | 'develo
   const [bookTarget, setBookTarget] = useState<BookTarget | null>(null)
   const [health, setHealth] = useState<Health>({ state: 'checking', detail: 'checking…' })
   const [user, setUser] = useState<User | null>(() => getUser())
+  const [profileStatus, setProfileStatus] = useState<ProfileStatus>(() => (getUser() ? 'ready' : 'loading'))
   const signedIn = !!getToken()
-  useEffect(() => { if (signedIn) me().then((u) => { if (u) setUser(u) }) }, [signedIn])
+  useEffect(() => {
+    if (!signedIn) return
+    me().then((u) => { if (u) setUser(u); setProfileStatus(u ? 'ready' : 'error') })
+  }, [signedIn])
 
   useEffect(() => {
     let live = true
@@ -122,12 +128,11 @@ function AppShell({ tab, sub, arg }: { tab: 'assistant' | 'playground' | 'develo
               <i />{health.state === 'ready' ? 'API ready' : health.state === 'degraded' ? health.detail : health.state === 'checking' ? 'checking…' : 'backend offline'}
             </span>
             {signedIn
-              ? <span className="user-pill" title={user ? `Signed in as ${user.email}` : 'Signed in'}>
-                  <i aria-hidden>{(user?.name || user?.email || '?').trim().charAt(0).toUpperCase()}</i>
-                  <span>{user?.name || user?.email || 'Your account'}</span>
-                </span>
-              : <span className="demo-pill" title="Local development server: accounts are switched off">Local workspace</span>}
-            <button className="btn ghost sm" onClick={async () => { if (signedIn) await logout(); go(signedIn ? '/signin' : '/') }}>{signedIn ? 'Sign out' : 'Exit'}</button>
+              ? <ProfileMenu user={user} status={profileStatus} onSignOut={async () => { await logout(); go('/signin') }} />
+              : <>
+                  <span className="demo-pill" title="Local development server: accounts are switched off">Local workspace</span>
+                  <button className="btn ghost sm" onClick={() => go('/')}>Exit</button>
+                </>}
           </div>
         </header>
         <main className="shell-main" key={tab}>
