@@ -2,7 +2,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 
-import { buildCards, journey, priceLabel, summarize } from './playgroundView.ts'
+import { buildCards, condTally, decisionHeading, journey, priceLabel, summarize } from './playgroundView.ts'
 import { traceFromRun } from './replay.ts'
 
 const att = (id: string, overall: string, v: Record<string, string>) => ({ candidate_id: id, candidate_name: id,
@@ -89,4 +89,29 @@ test('price label depends on the action type', () => {
   assert.equal(priceLabel('hotel'), 'per night, as listed')
   assert.equal(priceLabel('product'), 'as listed')
   assert.equal(priceLabel(null), 'as listed')
+})
+
+test('decision heading is plain and never overstates verification', () => {
+  const t = traceFromRun(LAPTOP) as never
+  const cards = buildCards(t)
+  assert.equal(decisionHeading(summarize(t, cards, false)!, cards), 'Needs human review')
+  const verified = traceFromRun({ ...LAPTOP, status: 'verified', attempts: [att('c5', 'VERIFIED', { budget: 'SATISFIED', ram: 'SATISFIED', display: 'SATISFIED' })] }) as never
+  const vc = buildCards(verified)
+  assert.equal(decisionHeading(summarize(verified, vc, false)!, vc), 'Verified')
+  const allRejected = traceFromRun({ ...LAPTOP, selected_candidate: { candidate_id: 'c9' } }) as never
+  const rc = buildCards(allRejected)
+  assert.equal(decisionHeading(summarize(allRejected, rc, false)!, rc), 'No verified match')
+  const none = traceFromRun({ ...LAPTOP, status: 'no_verified_match', candidates: [], ranked_candidates: [], attempts: [], selected_candidate: null, candidate_count: 0 }) as never
+  assert.equal(decisionHeading(summarize(none, [], false)!, []), 'No verified match')
+  const live = { requirements: [], candidateCount: null, candidates: [], ranked: [], verifying: null, verdicts: [], final: null, error: null, engine: null }
+  assert.equal(decisionHeading(summarize({ ...live, error: 'serpapi_failed' } as never, [], false)!, []), 'The run failed')
+  assert.equal(decisionHeading(summarize(live as never, [], true)!, []), 'Verifying…')
+})
+
+test('condition tally counts only checked conditions', () => {
+  const t = traceFromRun(LAPTOP) as never
+  const c9 = buildCards(t).find((c) => c.candidate_id === 'c9')!
+  assert.match(condTally(c9), /^\d+ of \d+ confirmed/)
+  assert.match(condTally(c9), /didn't match/)
+  assert.equal(condTally({ ...c9, conditions: [] }), '')
 })

@@ -150,3 +150,25 @@ export function journey(t: Trace | null, live: boolean): Journey {
 export function priceLabel(targetType: string | null | undefined): string {
   return targetType === 'hotel' ? 'per night, as listed' : 'as listed'
 }
+
+/** The one-line decision a person reads first. Never says "Verified" unless the backend verified
+    the pick; a needs-review run whose only option was rejected reads as "No verified match". */
+export function decisionHeading(s: Summary, cards: CandidateCard[]): string {
+  if (s.tone === 'ok') return 'Verified'
+  if (s.tone === 'warn') {
+    const focus = cards.find((c) => c.candidate_id === s.focus)
+    return focus?.status === 'REJECTED' ? 'No verified match' : 'Needs human review'
+  }
+  if (s.tone === 'bad' && !/failed/i.test(s.title)) return 'No verified match'
+  return s.title
+}
+
+/** Short plain-language tally of a candidate's conditions, e.g. "2 of 3 confirmed · 1 didn't match". */
+export function condTally(c: CandidateCard): string {
+  const n = { SATISFIED: 0, UNKNOWN: 0, CONTRADICTED: 0 }
+  for (const x of c.conditions) if (x.status !== 'NO_VERDICT') n[x.status]++
+  const checked = n.SATISFIED + n.UNKNOWN + n.CONTRADICTED
+  if (!checked) return ''
+  return [`${n.SATISFIED} of ${checked} confirmed`, n.UNKNOWN ? `${n.UNKNOWN} unconfirmed` : '', n.CONTRADICTED ? `${n.CONTRADICTED} didn't match` : '']
+    .filter(Boolean).join(' · ')
+}
