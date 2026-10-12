@@ -1,7 +1,7 @@
 import { test, beforeEach } from 'node:test'
 import assert from 'node:assert/strict'
 import { readdirSync, readFileSync } from 'node:fs'
-import { apiFetch, AUTH_REQUIRED_EVENT, clearToken, getToken, isApiUrl, login, logout, setToken } from './api.ts'
+import { apiFetch, AUTH_REQUIRED_EVENT, clearToken, getToken, getUser, isApiUrl, login, logout, me, register, rememberNext, setSession, setToken, takeExpiredNotice, takeNext } from './api.ts'
 
 type Call = { url: string; init: RequestInit }
 let calls: Call[] = []
@@ -13,12 +13,13 @@ const store = new Map<string, string>()
   setItem: (k: string, v: string) => { store.set(k, v) },
   removeItem: (k: string) => { store.delete(k) },
 }
-globalThis.fetch = (async (url: string, init: RequestInit = {}) => { calls.push({ url, init }); return respond(url) }) as typeof fetch
+const realFetch = (async (url: string, init: RequestInit = {}) => { calls.push({ url, init }); return respond(url) }) as typeof fetch
+globalThis.fetch = realFetch
 
 const auth = (c: Call) => new Headers(c.init.headers).get('Authorization')
 const future = () => Date.now() / 1000 + 600
 
-beforeEach(() => { calls = []; store.clear(); clearToken(); respond = () => new Response('{}', { status: 200 }) })
+beforeEach(() => { calls = []; store.clear(); clearToken(); takeExpiredNotice(); respond = () => new Response('{}', { status: 200 }) })
 
 test('token is attached to JSON, POST and streaming requests', async () => {
   setToken('tok.sig', future())
@@ -61,19 +62,92 @@ test('a 401 clears the token and signals sign-in', async () => {
   delete g.dispatchEvent
 })
 
-test('login stores the server token; failure surfaces the server message; logout revokes and clears', async () => {
-  respond = () => new Response(JSON.stringify({ detail: { message: 'That demo password is not correct.' } }), { status: 401 })
-  assert.deepEqual(await login('nope'), { ok: false, message: 'That demo password is not correct.' })
-  assert.equal(getToken(), null)
-  respond = () => new Response(JSON.stringify({ token: 'p.s', expires_at: future() }), { status: 200 })
-  assert.deepEqual(await login('right'), { ok: true })
+const USER = { user_id: 'u1', name: 'Ada', email: 'ada@example.com' }
+const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status })
+
+test('sign-in: success stores the token and profile (never the password) and returns the user', async () => {
+  respond = () => json({ token: 'p.s', expires_at: future(), user: USER })
+  assert.deepEqual(await login(' ada@example.com ', 'a-long-password'), { ok: true, user: USER })
   assert.equal(getToken(), 'p.s')
-  assert.match(String(calls[1].init.body), /"password":"right"/)
-  assert.ok(!JSON.stringify([...store.values()]).includes('right'))      // password never stored
+  assert.deepEqual(getUser(), USER)
+  assert.equal(calls[0].url, '/v1/auth/login')
+  assert.deepEqual(JSON.parse(String(calls[0].init.body)), { email: 'ada@example.com', password: 'a-long-password' })
+  assert.ok(!JSON.stringify([...store.values()]).includes('a-long-password'))
+})
+
+test('sign-in: wrong credentials, throttling, server and network errors become clear messages', async () => {
+  respond = () => json({ detail: { code: 'invalid_credentials', message: 'Email or password is incorrect.', errors: {} } }, 401)
+  assert.deepEqual(await login('ada@example.com', 'nope'), { ok: false, status: 401, message: 'Email or password is incorrect.', errors: {} })
+  assert.equal(getToken(), null)
+  respond = () => json({ detail: { code: 'too_many_attempts', message: 'Too many failed sign-in attempts. Wait 15 minutes and try again.' } }, 429)
+  assert.match((await login('a@b.co', 'x') as { message: string }).message, /Too many failed/)
+  respond = () => json({ detail: 'boom' }, 503)
+  assert.match((await login('a@b.co', 'x') as { message: string }).message, /unavailable/)
+  globalThis.fetch = (async () => { throw new TypeError('Failed to fetch') }) as typeof fetch
+  const offline = await login('a@b.co', 'x')
+  assert.equal(offline.ok, false)
+  assert.match((offline as { message: string }).message, /could not be reached/)
+  globalThis.fetch = realFetch
+})
+
+test('sign-up: success signs in; duplicate email and server field errors map onto fields', async () => {
+  respond = () => json({ detail: { code: 'email_taken', message: 'An account with this email already exists. Sign in instead.',
+    errors: { email: 'An account with this email already exists.' } } }, 409)
+  const dup = await register('Ada', 'ada@example.com', 'a-long-password')
+  assert.equal(dup.ok, false)
+  assert.equal((dup as { status: number }).status, 409)
+  assert.deepEqual((dup as { errors: object }).errors, { email: 'An account with this email already exists.' })
+  respond = () => json({ detail: { code: 'invalid_signup', message: 'Please fix the highlighted fields.', errors: { password: 'Use at least 10 characters.', bogus: 'x' } } }, 422)
+  assert.deepEqual((await register('Ada', 'ada@example.com', 'short') as { errors: object }).errors, { password: 'Use at least 10 characters.' })
+  respond = () => json({ token: 'n.t', expires_at: future(), user: USER }, 201)
+  assert.deepEqual(await register(' Ada ', 'ada@example.com', 'a-long-password'), { ok: true, user: USER })
+  assert.deepEqual(JSON.parse(String(calls.at(-1)!.init.body)), { name: 'Ada', email: 'ada@example.com', password: 'a-long-password' })
+  assert.equal(getToken(), 'n.t')
+})
+
+test('session expiry: a token that runs out, or a 401 from the API, ends the session with a notice', async () => {
+  setSession('t', Date.now() / 1000 + 600, USER)
+  assert.equal(getToken(Date.now() / 1000 + 601), null)            // expired locally
+  assert.equal(getUser(), null)
+  assert.equal(takeExpiredNotice(), true)
+  assert.equal(takeExpiredNotice(), false)                         // shown once
+  setSession('t2', future(), USER)
+  respond = () => json({ detail: { code: 'auth_required' } }, 401)
+  await apiFetch('/v1/runs')                                         // revoked / expired on the server
+  assert.equal(getToken(), null)
+  assert.equal(takeExpiredNotice(), true)
+})
+
+test('regression: requests in flight after the token ran out do not erase the expiry notice', async () => {
+  setSession('t', Date.now() / 1000 - 1, USER)                       // already expired
+  respond = () => json({ detail: { code: 'auth_required' } }, 401)
+  await apiFetch('/v1/runs')                                         // sent without a token -> 401
+  await apiFetch('/v1/runs?limit=10')
+  assert.equal(auth(calls[0]), null)
+  assert.equal(takeExpiredNotice(), true)
+})
+
+test('logout revokes on the server, clears the session and shows no expiry notice', async () => {
+  setSession('p.s', future(), USER)
   await logout()
   assert.equal(getToken(), null)
-  assert.equal(calls[2].url, '/v1/auth/logout')
-  assert.equal(auth(calls[2]), 'Bearer p.s')
+  assert.equal(getUser(), null)
+  assert.equal(calls[0].url, '/v1/auth/logout')
+  assert.equal(auth(calls[0]), 'Bearer p.s')
+  assert.equal(takeExpiredNotice(), false)
+})
+
+test('me() refreshes the profile; after sign-in the app returns to the screen the visitor wanted', async () => {
+  setSession('p.s', future(), null)
+  respond = () => json({ ...USER, name: 'Ada L.' })
+  assert.equal((await me())?.name, 'Ada L.')
+  assert.equal(getUser()?.name, 'Ada L.')
+  assert.equal(auth(calls[0]), 'Bearer p.s')
+  rememberNext('/app/developers/trace')
+  assert.equal(takeNext(), '/app/developers/trace')
+  assert.equal(takeNext(), '/app')                                  // used once
+  rememberNext('https://evil.example.com')                          // only in-app routes are remembered
+  assert.equal(takeNext(), '/app')
 })
 
 test('every API call in the app goes through apiFetch (no raw fetch elsewhere)', () => {

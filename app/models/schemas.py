@@ -4,7 +4,12 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
+
+# Input bounds for the credit-spending endpoints (same limits as the MCP tools in app/mcp/server.py).
+MAX_REQUEST_CHARS = 2000
+MAX_CANDIDATES = 50
+MAX_REQUIREMENTS = 30
 
 RequirementImportance = Literal["required", "preferred"]
 RequirementStatus = Literal["SATISFIED", "CONTRADICTED", "UNKNOWN"]
@@ -122,15 +127,30 @@ class AttemptRecord(BaseModel):
 
 
 class FindAndVerifyRequest(BaseModel):
-    request: str
-    action: str = "search"
-    max_candidates: int = 15
-    engine: str | None = None
+    request: str = Field(min_length=3, max_length=MAX_REQUEST_CHARS)
+    action: str = Field("search", max_length=64)
+    max_candidates: int = Field(15, ge=1, le=MAX_CANDIDATES)
+    engine: str | None = Field(None, pattern=r"^[a-z_]{1,40}$")
+
+    @field_validator("request")
+    @classmethod
+    def _not_blank(cls, v: str) -> str:
+        if len(v.strip()) < 3:
+            raise ValueError("request must contain at least 3 non-space characters")
+        return v.strip()
 
 
 class VerifyRequest(BaseModel):
-    requirements: list[Requirement]
+    requirements: list[Requirement] = Field(min_length=1, max_length=MAX_REQUIREMENTS)
     candidate: Candidate
+
+    @field_validator("requirements")
+    @classmethod
+    def _unique_ids(cls, v: list[Requirement]) -> list[Requirement]:
+        ids = [r.id for r in v]
+        if len(set(ids)) != len(ids):
+            raise ValueError("requirement ids must be unique")
+        return v
 
 
 class FindAndVerifyResponse(BaseModel):

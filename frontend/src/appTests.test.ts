@@ -2,7 +2,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 
-import { validateForgot, validateSignIn, validateSignUp } from './authForms.ts'
+import { PASSWORD_MAX, PASSWORD_MIN, validateSignIn, validateSignUp } from './authForms.ts'
 import { parseRoute } from './route.ts'
 import { getRecognitionCtor, mergeTranscript, speechErrorMessage } from './speech.ts'
 import { pipelineStages } from './traceEvents.ts'
@@ -49,13 +49,22 @@ test('speech: permission denial has a clear message', () => {
   assert.match(speechErrorMessage('weird'), /still type/)
 })
 
-test('auth forms validate fields (demo only, nothing is submitted)', () => {
+test('sign-in form: email and password are required; nothing else is checked client-side', () => {
   assert.deepEqual(Object.keys(validateSignIn({ email: 'x', password: '' })).sort(), ['email', 'password'])
-  assert.deepEqual(validateSignIn({ email: 'a@b.co', password: 'x' }), {})
-  const e = validateSignUp({ name: '', email: 'a@b.co', password: 'short', confirm: 'nope', terms: false })
-  assert.deepEqual(Object.keys(e).sort(), ['confirm', 'name', 'password', 'terms'])
-  assert.deepEqual(validateSignUp({ name: 'A', email: 'a@b.co', password: 'secret123', confirm: 'secret123', terms: true }), {})
-  assert.ok(validateForgot({ email: 'bad' }).email)
+  assert.deepEqual(validateSignIn({ email: ' a@b.co ', password: 'x' }), {})          // the server judges the password
+  assert.ok(validateSignIn({ email: 'a@b.co', password: 'x'.repeat(PASSWORD_MAX + 1) }).password)
+})
+
+test('sign-up form mirrors the server rules (name, email, 10–128 char password, matching confirmation)', () => {
+  const e = validateSignUp({ name: '', email: 'a@b', password: 'short', confirm: 'nope' })
+  assert.deepEqual(Object.keys(e).sort(), ['confirm', 'email', 'name', 'password'])
+  assert.equal(PASSWORD_MIN, 10)
+  assert.match(validateSignUp({ name: 'A', email: 'a@b.co', password: '123456789', confirm: '123456789' }).password!, /at least 10/)
+  assert.ok(validateSignUp({ name: 'A', email: 'a@b.co', password: ' '.repeat(12), confirm: ' '.repeat(12) }).password)
+  assert.ok(validateSignUp({ name: 'A', email: 'a@b.co', password: 'x'.repeat(129), confirm: 'x'.repeat(129) }).password)
+  assert.ok(validateSignUp({ name: 'A'.repeat(101), email: 'a@b.co', password: 'a-long-password', confirm: 'a-long-password' }).name)
+  assert.equal(validateSignUp({ name: 'Ada', email: 'a@b.co', password: 'a-long-password', confirm: 'a-long-passworD' }).confirm, 'Passwords do not match.')
+  assert.deepEqual(validateSignUp({ name: 'Ada', email: 'ada@example.com', password: 'a-long-password', confirm: 'a-long-password' }), {})
 })
 
 test('routes', () => {

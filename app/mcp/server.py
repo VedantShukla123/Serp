@@ -48,7 +48,7 @@ mcp_server = MCPServer(name="proofgate", title="ProofGate", version="0.1.0", ins
 def _safe(message: str) -> str:
     """Strip any configured secret from an error message before it leaves the server."""
     s = load_settings()
-    for secret in (s.serpapi_api_key, s.llm_api_key, s.jev_api_key, s.proofgate_api_key, s.demo_password, s.session_secret):
+    for secret in (s.serpapi_api_key, s.llm_api_key, s.jev_api_key, s.proofgate_api_key, s.session_secret):
         if secret:
             message = message.replace(secret, "***")
     return message

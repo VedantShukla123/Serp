@@ -106,7 +106,7 @@ def test_run_ids_are_encoded_as_one_path_segment() -> None:
 def test_client_paths_exist_in_the_real_api() -> None:
     paths = set(app.openapi()["paths"])
     for p in ("/health", "/v1/runs", "/v1/runs/{run_id}", "/v1/runs/{run_id}/evidence", "/v1/find-and-verify", "/v1/verify",
-              "/v1/auth/status", "/v1/auth/login"):
+              "/v1/auth/status", "/v1/auth/login", "/v1/auth/register", "/v1/auth/me", "/v1/auth/logout"):
         assert p in paths, p
 
 
@@ -119,9 +119,29 @@ def test_login_and_token_are_sent_as_bearer() -> None:
             return httpx.Response(200, json={"token": "p.s", "token_type": "bearer", "expires_at": 1, "ttl_seconds": 1})
         return httpx.Response(200, json=[])
     pg = ProofGateClient("http://pg.test", transport=httpx.MockTransport(handler))
-    pg.login("demo-password-123")
+    pg.login("ada@example.com", "a-long-password")
     pg.list_runs()
     assert "authorization" not in seen[0].headers and seen[1].headers["authorization"] == "Bearer p.s"
+    assert json.loads(seen[0].content) == {"email": "ada@example.com", "password": "a-long-password"}
     pg2 = ProofGateClient("http://pg.test", token="t.k", transport=httpx.MockTransport(handler))
     pg2.list_runs()
     assert seen[2].headers["authorization"] == "Bearer t.k"
+
+
+def test_register_me_and_logout_use_the_real_routes() -> None:
+    seen: list[httpx.Request] = []
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        seen.append(req)
+        if req.url.path == "/v1/auth/register":
+            return httpx.Response(201, json={"token": "t.1", "user": {"user_id": "u1"}})
+        if req.url.path == "/v1/auth/me":
+            return httpx.Response(200, json={"user_id": "u1", "email": "ada@example.com"})
+        return httpx.Response(200, json={"ok": True})
+    pg = ProofGateClient("http://pg.test", transport=httpx.MockTransport(handler))
+    pg.register("Ada", "ada@example.com", "a-long-password")
+    assert pg.me()["user_id"] == "u1" and seen[1].headers["authorization"] == "Bearer t.1"
+    pg.logout()
+    assert seen[2].url.path == "/v1/auth/logout" and seen[2].headers["authorization"] == "Bearer t.1"
+    pg.list_runs()
+    assert "authorization" not in seen[3].headers

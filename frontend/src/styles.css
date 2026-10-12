@@ -159,6 +159,10 @@ button { font: inherit; }
 .api-dot.ready i { background: #22b573; box-shadow: 0 0 8px #22b573; }
 .api-dot.degraded i { background: #e8a312; box-shadow: 0 0 8px #e8a312; }
 .demo-pill { font-size: 12px; font-weight: 800; color: var(--amber); background: var(--amber-bg); border-radius: 999px; padding: 6px 12px; white-space: nowrap; }
+.user-pill { display: inline-flex; align-items: center; gap: 8px; max-width: 220px; font-size: 13px; font-weight: 700; color: var(--plum); white-space: nowrap; }
+.user-pill > span { overflow: hidden; text-overflow: ellipsis; }
+.user-pill i { flex: none; display: grid; place-items: center; width: 26px; height: 26px; border-radius: 50%; font-style: normal; font-size: 12px; font-weight: 800; color: #fff; background: var(--violet); }
+@media (max-width: 640px) { .user-pill > span { display: none; } }
 .shell-main { flex: 1; min-height: 0; display: flex; flex-direction: column; animation: fade 0.3s ease both; }
 
 /* ---------- assistant (existing chat, refined) ---------- */
@@ -529,6 +533,13 @@ button { font: inherit; }
 .demo-notice { padding: 16px; border-radius: var(--r-md); background: var(--amber-bg); color: #6f4d0c; display: flex; flex-direction: column; gap: 10px; }
 .demo-notice b { color: var(--amber); }
 .demo-notice p { margin: 0; font-size: 14px; }
+.demo-notice.info { background: rgba(122, 79, 181, 0.08); color: var(--plum); }
+.demo-notice.info b { color: var(--violet); }
+.auth-card .demo-notice { margin-bottom: 16px; }
+.form-error { margin: 0; padding: 10px 14px; border-radius: var(--r-md); background: var(--rose-bg); color: var(--rose); font-size: 14px; font-weight: 600; }
+.auth-card .center { text-align: center; margin: 0; }
+.auth-card .taken { margin: -6px 0 0; }
+.btn.primary:disabled { opacity: 0.7; cursor: progress; }
 .auth-checking { min-height: 100vh; display: grid; place-items: center; color: var(--muted, #6b6880); font-size: 14px; }
 
 /* =================================================================== */

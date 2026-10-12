@@ -353,7 +353,7 @@ function RestApi({ shell, setShell, openKey }: { shell: Shell; setShell: (s: She
           <CopyButton text={API_BASE} label="Copy base URL" />
           <a className="link sm" href={`${API_BASE}/docs`} target="_blank" rel="noreferrer">FastAPI docs (/docs) ↗</a>
         </div>
-        <p className="api-warn sm"><b>Sign-in required when deployed.</b> A deployed server needs <code>Authorization: Bearer &lt;token&gt;</code> on every <code>/v1</code> call (token from <code>POST /v1/auth/login</code> with the demo password); a local development server needs none. Live search/verification calls are rate-limited per session.</p>
+        <p className="api-warn sm"><b>An account is required when deployed.</b> A deployed server needs <code>Authorization: Bearer &lt;token&gt;</code> on every <code>/v1</code> call (token from <code>POST /v1/auth/login</code> with your email and password); a local development server needs none. Every run, booking and order belongs to the account that created it. Live search/verification calls are rate-limited per account.</p>
         <div className="api-tools">
           <label className="search">
             <span className="sr">Search endpoints</span>
@@ -370,7 +370,7 @@ function RestApi({ shell, setShell, openKey }: { shell: Shell; setShell: (s: She
           <ShellSwitch shell={shell} setShell={setShell} />
         </div>
         <div className="api-login">
-          <p className="sm"><b>1 · Sign in first (deployed demo).</b> <code>POST /v1/auth/login</code> takes <code>{'{"password": "…"}'}</code> — the shared demo password from whoever runs the demo — and returns <code>{'{"token", "expires_at", "ttl_seconds"}'}</code>. This prompts for the password and keeps the short-lived token in <code>PROOFGATE_TOKEN</code>; every example below sends it as <code>Authorization: Bearer $PROOFGATE_TOKEN</code>. A local development server needs no sign-in and ignores the header. <code>/health</code> and <code>/v1/auth/*</code> are public.</p>
+          <p className="sm"><b>1 · Sign in first (deployed server).</b> Create an account in the app (or <code>POST /v1/auth/register</code> with <code>{'{"name", "email", "password"}'}</code>). <code>POST /v1/auth/login</code> takes <code>{'{"email": "…", "password": "…"}'}</code> and returns <code>{'{"token", "expires_at", "ttl_seconds", "user"}'}</code>. This prompts for your email and password and keeps the short-lived token in <code>PROOFGATE_TOKEN</code>; every example below sends it as <code>Authorization: Bearer $PROOFGATE_TOKEN</code>. <code>GET /v1/auth/me</code> shows the signed-in account. A local development server needs no sign-in and ignores the header. <code>/health</code>, <code>/v1/auth/status</code>, <code>register</code>, <code>login</code> and <code>logout</code> are public.</p>
           <Code lang={shell === 'bash' ? 'bash' : 'PowerShell'} code={loginExample(shell)} />
         </div>
       </section>

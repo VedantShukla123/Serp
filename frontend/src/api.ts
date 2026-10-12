@@ -1,39 +1,87 @@
 /* The one place the browser talks to the ProofGate API (no React) — unit-tested.
-   Attaches the demo-session bearer token to every API request (JSON, streaming SSE,
-   simulated actions, Developer tools). The token is a short-lived server-signed value kept
-   in sessionStorage (cleared when the tab closes) — never in a VITE_ variable. */
+   Attaches the signed-in account's bearer token to every API request (JSON, streaming SSE,
+   simulated actions, Developer tools). The token is a short-lived server-signed value kept in
+   sessionStorage with the public profile (cleared when the tab closes) — never in a VITE_ variable,
+   and the password is never stored. */
 import { API_BASE, API_ORIGIN, apiUrl } from './devhub.ts'
 
 const KEY = 'proofgate.auth'
+const EXPIRED_KEY = 'proofgate.session_expired'
+const NEXT_KEY = 'proofgate.next'
 /** Fired on window when the API rejects the token (expired / revoked) — the app returns to sign-in. */
 export const AUTH_REQUIRED_EVENT = 'proofgate:auth-required'
 
-type Stored = { token: string; exp: number }
+export type User = { user_id: string; name: string; email: string; created_at?: string }
+type Stored = { token: string; exp: number; user?: User | null }
 let memory: Stored | null = null          // fallback when sessionStorage is unavailable
 
 function storage(): Storage | null {
   try { return globalThis.sessionStorage ?? null } catch { return null }
 }
 
-/** Current token, or null if none / expired (`now` in seconds). */
-export function getToken(now: number = Date.now() / 1000): string | null {
+function read(): Stored | null {
   let s: Stored | null = memory
   try {
     const raw = storage()?.getItem(KEY)
     if (raw) s = JSON.parse(raw) as Stored
   } catch { /* use memory */ }
-  if (!s || typeof s.token !== 'string' || !(s.exp > now)) return null
+  return s && typeof s.token === 'string' ? s : null
+}
+
+/** Current token, or null if none / expired (`now` in seconds). A token that ran out is cleared
+    and remembered so the sign-in screen can say the session expired. */
+export function getToken(now: number = Date.now() / 1000): string | null {
+  const s = read()
+  if (!s) return null
+  if (!(s.exp > now)) { endSession('expired'); return null }
   return s.token
 }
 
-export function setToken(token: string, exp: number): void {
-  memory = { token, exp }
-  try { storage()?.setItem(KEY, JSON.stringify(memory)) } catch { /* memory only */ }
+/** The signed-in account's public profile (no secrets), or null. */
+export function getUser(now: number = Date.now() / 1000): User | null {
+  return getToken(now) ? read()?.user ?? null : null
 }
+
+export function setSession(token: string, exp: number, user: User | null = null): void {
+  memory = { token, exp, user }
+  try { storage()?.setItem(KEY, JSON.stringify(memory)); storage()?.removeItem(EXPIRED_KEY) } catch { /* memory only */ }
+}
+
+/** Backwards-compatible alias. */
+export const setToken = (token: string, exp: number) => setSession(token, exp)
 
 export function clearToken(): void {
   memory = null
   try { storage()?.removeItem(KEY) } catch { /* ignore */ }
+}
+
+let expiredFlag = false
+function endSession(reason: 'expired' | 'signed_out'): void {
+  clearToken()
+  expiredFlag = reason === 'expired'
+  try {
+    if (reason === 'expired') storage()?.setItem(EXPIRED_KEY, '1')
+    else storage()?.removeItem(EXPIRED_KEY)
+  } catch { /* memory flag only */ }
+}
+
+/** True once after a session expired or was rejected (read by the sign-in screen, then cleared). */
+export function takeExpiredNotice(): boolean {
+  let flagged = expiredFlag
+  try { flagged = flagged || storage()?.getItem(EXPIRED_KEY) === '1'; storage()?.removeItem(EXPIRED_KEY) } catch { /* ignore */ }
+  expiredFlag = false
+  return flagged
+}
+
+/** Where to go after signing in: the app screen the visitor was sent away from (hash routes only). */
+export function rememberNext(route: string): void {
+  if (!route.startsWith('/app')) return
+  try { storage()?.setItem(NEXT_KEY, route) } catch { /* ignore */ }
+}
+export function takeNext(): string {
+  let next = '/app'
+  try { next = storage()?.getItem(NEXT_KEY) || '/app'; storage()?.removeItem(NEXT_KEY) } catch { /* ignore */ }
+  return next.startsWith('/app') ? next : '/app'
 }
 
 /** True for URLs that point at the ProofGate API — the token is never sent anywhere else. */
@@ -49,14 +97,17 @@ export async function apiFetch(pathOrUrl: string, init: RequestInit = {}): Promi
   const token = getToken()
   if (token && isApiUrl(url)) headers.set('Authorization', `Bearer ${token}`)
   const res = await fetch(url, { ...init, headers })
-  if (res.status === 401 && !url.includes('/v1/auth/')) {
-    clearToken()
+  if (res.status === 401 && !url.includes('/v1/auth/login') && !url.includes('/v1/auth/register')) {
+    // A request sent without a token (e.g. right after the token ran out) must not erase the
+    // "session expired" notice that getToken() just recorded.
+    if (token) endSession('expired')
+    else clearToken()
     try { globalThis.dispatchEvent?.(new Event(AUTH_REQUIRED_EVENT)) } catch { /* non-browser */ }
   }
   return res
 }
 
-export type AuthStatus = { auth_required: boolean; configured: boolean }
+export type AuthStatus = { auth_required: boolean; configured: boolean; accounts?: boolean }
 
 /** GET /v1/auth/status — null if the backend is unreachable. */
 export async function authStatus(): Promise<AuthStatus | null> {
@@ -66,30 +117,66 @@ export async function authStatus(): Promise<AuthStatus | null> {
   } catch { return null }
 }
 
-export type LoginResult = { ok: true } | { ok: false; message: string }
+export type FieldErrors = Partial<Record<'name' | 'email' | 'password' | 'confirm', string>>
+export type AuthResult = { ok: true; user: User } | { ok: false; status: number; message: string; errors: FieldErrors }
 
-/** POST /v1/auth/login with the demo password; stores the returned token. */
-export async function login(password: string): Promise<LoginResult> {
+type ApiDetail = { code?: string; message?: string; errors?: Record<string, string> }
+
+/** Turns any auth response into a result the forms can show (field errors + one message). */
+export async function toAuthResult(r: Response): Promise<AuthResult> {
+  const j = await r.json().catch(() => ({})) as { token?: string; expires_at?: number; user?: User; detail?: ApiDetail | unknown[] }
+  if (r.ok && j.token && j.expires_at && j.user) {
+    setSession(j.token, j.expires_at, j.user)
+    return { ok: true, user: j.user }
+  }
+  const d = (j.detail && !Array.isArray(j.detail) ? j.detail : {}) as ApiDetail
+  const errors: FieldErrors = {}
+  for (const k of ['name', 'email', 'password'] as const) if (d.errors?.[k]) errors[k] = d.errors[k]
+  const message = d.message
+    || (r.status === 422 ? 'Please check the highlighted fields.'
+      : r.status === 429 ? 'Too many attempts. Please wait and try again.'
+        : r.status >= 500 ? 'ProofGate is unavailable right now. Please try again shortly.'
+          : `Request failed (HTTP ${r.status}).`)
+  return { ok: false, status: r.status, message, errors }
+}
+
+async function postAuth(path: string, body: Record<string, string>): Promise<AuthResult> {
   let r: Response
   try {
-    r = await fetch(apiUrl('/v1/auth/login'), {
-      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ password }),
-    })
+    r = await fetch(apiUrl(path), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
   } catch {
-    return { ok: false, message: 'The ProofGate backend could not be reached.' }
+    return { ok: false, status: 0, message: 'The ProofGate server could not be reached. Check your connection and try again.', errors: {} }
   }
-  const j = await r.json().catch(() => ({})) as { token?: string; expires_at?: number; detail?: { message?: string } }
-  if (r.ok && j.token && j.expires_at) {
-    setToken(j.token, j.expires_at)
-    return { ok: true }
-  }
-  return { ok: false, message: j.detail?.message || `Sign-in failed (HTTP ${r.status}).` }
+  return toAuthResult(r)
+}
+
+/** POST /v1/auth/login with email + password; stores the token and profile on success. */
+export function login(email: string, password: string): Promise<AuthResult> {
+  return postAuth('/v1/auth/login', { email: email.trim(), password })
+}
+
+/** POST /v1/auth/register; on success the new account is signed in. */
+export function register(name: string, email: string, password: string): Promise<AuthResult> {
+  return postAuth('/v1/auth/register', { name: name.trim(), email: email.trim(), password })
+}
+
+/** GET /v1/auth/me — refreshes the stored profile; null if not signed in (a 401 ends the session). */
+export async function me(): Promise<User | null> {
+  const s = read()
+  if (!getToken()) return null
+  try {
+    const r = await apiFetch('/v1/auth/me')
+    if (!r.ok) return null
+    const user = await r.json() as User
+    if (s) setSession(s.token, s.exp, user)
+    return user
+  } catch { return null }
 }
 
 /** POST /v1/auth/logout (revokes the token server-side), then forget it locally. */
 export async function logout(): Promise<void> {
-  const token = getToken()
-  clearToken()
+  const token = read()?.token ?? null
+  endSession('signed_out')
   if (!token) return
   try {
     await fetch(apiUrl('/v1/auth/logout'), { method: 'POST', headers: { Authorization: `Bearer ${token}` } })

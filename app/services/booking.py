@@ -21,8 +21,9 @@ import uuid
 from datetime import date, datetime, timezone
 from typing import Any
 
-from app.models.schemas import BookingRequest
+from app.models.schemas import BookingRequest, Requirement, RequirementVerdict
 from app.services.actions import candidate_target_type
+from app.services.jev_verifier import overall_status
 from app.storage import store
 
 DISCLAIMER = "SIMULATED BOOKING — NO REAL RESERVATION CREATED — NO PAYMENT CHARGED"
@@ -89,11 +90,29 @@ def _attempt(run: dict, candidate_id: str) -> dict | None:
     return None
 
 
+_STRICTNESS = {"VERIFIED": 0, "UNVERIFIED": 1, "REJECTED": 2}
+
+
+def _recorded_status(run: dict, verification: dict) -> str:
+    """Status the stored verdicts actually support. Takes the stricter of the stored label and a
+    recomputation from the recorded requirement verdicts (guards runs saved by older code)."""
+    stored = verification.get("overall_status")
+    if stored not in _STRICTNESS:
+        return "UNVERIFIED" if stored else NOT_CHECKED     # unknown labels are never treated as verified
+    try:
+        reqs = [Requirement(**r) for r in run.get("requirements") or [] if isinstance(r, dict)]
+        verdicts = [RequirementVerdict(**v) for v in verification.get("requirements") or [] if isinstance(v, dict)]
+        recomputed = overall_status(reqs, verdicts)
+    except Exception:
+        return stored if stored != "VERIFIED" else "UNVERIFIED"   # unreadable record: not proof of VERIFIED
+    return max(stored, recomputed, key=_STRICTNESS.__getitem__)
+
+
 def verification_summary(run: dict, candidate_id: str) -> dict:
     """Jev status + open points for one candidate (shared by every action type)."""
     attempt = _attempt(run, candidate_id)
     verification = (attempt or {}).get("verification") or {}
-    status = verification.get("overall_status") or NOT_CHECKED
+    status = _recorded_status(run, verification) if verification else NOT_CHECKED
     descriptions = {r.get("id"): r.get("description") for r in run.get("requirements") or [] if isinstance(r, dict)}
 
     def _with(st: str) -> list[dict]:
@@ -194,7 +213,8 @@ def preview_booking(run: dict, req: BookingRequest, today: date | None = None) -
                                      if estimate is not None else None)}
 
 
-def create_booking(db_path: str, run: dict, req: BookingRequest, today: date | None = None) -> dict:
+def create_booking(db_path: str, run: dict, req: BookingRequest, today: date | None = None,
+                   owner_id: str | None = None) -> dict:
     preview = preview_booking(run, req, today)
     if preview["requires_acknowledgement"] and not req.acknowledge_unverified:
         raise BookingError(409, "acknowledgement_required",
@@ -208,5 +228,5 @@ def create_booking(db_path: str, run: dict, req: BookingRequest, today: date | N
         "acknowledged_unverified": bool(req.acknowledge_unverified and preview["requires_acknowledgement"]),
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
-    store.save_booking(db_path, booking)
+    store.save_booking(db_path, booking, owner_id)
     return booking

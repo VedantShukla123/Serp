@@ -44,9 +44,9 @@ export const GROUPS: Group[] = [
   { id: 'verify', title: 'Search and verification', items: [
     { method: 'POST', path: '/v1/find-and-verify', cost: 'paid', purpose: 'Run the full pipeline for one request and store the run.',
       inputs: [
-        { name: 'request', type: 'string', req: true, note: 'What to find, with its hard requirements.' },
+        { name: 'request', type: 'string', req: true, note: 'What to find, with its hard requirements (3–2000 characters).' },
         { name: 'action', type: 'string', note: 'Default "search". e.g. book_hotel, buy_laptop.' },
-        { name: 'max_candidates', type: 'int', note: 'Default 15.' },
+        { name: 'max_candidates', type: 'int', note: 'Default 15, range 1–50.' },
         { name: 'engine', type: 'string | null', note: 'Force a SerpApi engine, e.g. google_hotels.' },
       ],
       returns: `{ ${RUN_FIELDS} } — status: verified · needs_human_review · no_verified_match`,
@@ -54,7 +54,7 @@ export const GROUPS: Group[] = [
       ex: () => ({ method: 'POST', path: '/v1/find-and-verify', body: { request: 'Hotel in Goa under Rs 10,000 for 2 people, beachfront, free cancellation', action: 'book_hotel', max_candidates: 5 } }) },
     { method: 'POST', path: '/v1/verify', cost: 'paid', purpose: 'Check one candidate you supply against your requirements (no search).',
       inputs: [
-        { name: 'requirements', type: 'array', req: true, note: '[{ id, description, type?, importance?: "required" | "preferred" }]' },
+        { name: 'requirements', type: 'array', req: true, note: '[{ id, description, type?, importance?: "required" | "preferred" }] — 1 to 30 items' },
         { name: 'candidate', type: 'object', req: true, note: '{ candidate_id, name, …any candidate fields }' },
       ],
       returns: '{ candidate_id, overall_status: VERIFIED · UNVERIFIED · REJECTED, requirements: [{ requirement_id, status, reason, supporting_data, confidence }], verifier }',

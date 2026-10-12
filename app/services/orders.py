@@ -121,7 +121,7 @@ def preview_order(run: dict, req: OrderRequest) -> dict:
                               "Not calculated — the listed price or its currency is not reliable enough.")}
 
 
-def create_order(db_path: str, run: dict, req: OrderRequest) -> dict:
+def create_order(db_path: str, run: dict, req: OrderRequest, owner_id: str | None = None) -> dict:
     preview = preview_order(run, req)
     if preview["requires_acknowledgement"] and not req.acknowledge_unverified:
         raise BookingError(409, "acknowledgement_required",
@@ -135,5 +135,5 @@ def create_order(db_path: str, run: dict, req: OrderRequest) -> dict:
         "acknowledged_unverified": bool(req.acknowledge_unverified and preview["requires_acknowledgement"]),
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
-    store.save_order(db_path, order)
+    store.save_order(db_path, order, owner_id)
     return order

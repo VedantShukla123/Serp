@@ -40,12 +40,14 @@ def _call_pipeline(
         return fn(request, action, settings, max_candidates, engine)
 
 
+def _history_key(sid: str, owner: str | None) -> str:
+    """Chat history is stored per account: a client-supplied session_id alone never reaches
+    another user's conversation."""
+    return f"{owner}:{sid}" if owner else sid
+
+
 def _sanitize(text: str, settings: Settings) -> str:
-    safe = text
-    for secret in (settings.serpapi_api_key, settings.llm_api_key, settings.jev_api_key):
-        if secret:
-            safe = safe.replace(secret, "***")
-    return safe
+    return settings.redact(text)
 
 
 def _history_messages(history: list[Any]) -> list[dict]:
@@ -259,6 +261,7 @@ def run_agent_turn(
     session_id: str | None,
     settings: Settings,
     emit: Callable[[dict], None] | None = None,
+    owner: str | None = None,
 ) -> dict:
     """Run one chat turn. Returns {reply, status, run_id, selected_candidate, verification, attempts, session_id}."""
     if not message or not message.strip():
@@ -273,7 +276,7 @@ def run_agent_turn(
         except Exception:
             pass
 
-    history = store.get_history(settings.db_path, sid, limit=8)
+    history = store.get_history(settings.db_path, _history_key(sid, owner), limit=8)
     _emit({"type": "status", "stage": "routing", "message": "Routing your request..."})
     try:
         route = router_llm(message, history, settings)
@@ -293,8 +296,8 @@ def run_agent_turn(
             f"Router note: {route.get('note', '')}"
         )
         reply = composer_llm(message, history, trace_summary, settings)
-        store.save_turn(settings.db_path, sid, "user", message)
-        store.save_turn(settings.db_path, sid, "assistant", reply)
+        store.save_turn(settings.db_path, _history_key(sid, owner), "user", message)
+        store.save_turn(settings.db_path, _history_key(sid, owner), "assistant", reply)
         return {
             "reply": reply,
             "status": "direct",
@@ -310,8 +313,8 @@ def run_agent_turn(
     rec = _call_pipeline(message, action, settings, 15, engine, _emit)
     trace_summary = _trace_summary_for_record(rec)
     reply = _with_status_summary(composer_llm(message, history, trace_summary, settings), rec)
-    store.save_turn(settings.db_path, sid, "user", message)
-    store.save_turn(settings.db_path, sid, "assistant", reply)
+    store.save_turn(settings.db_path, _history_key(sid, owner), "user", message)
+    store.save_turn(settings.db_path, _history_key(sid, owner), "assistant", reply)
 
     selected = getattr(rec, "selected_candidate", None)
     verification = getattr(rec, "verification", None)
@@ -332,6 +335,7 @@ def sse_turn(
     message: str,
     session_id: str | None,
     settings: Settings,
+    owner: str | None = None,
 ) -> Iterator[dict]:
     """Yield SSE event dicts: status -> [status] -> requirements -> searching -> candidates -> ranking -> verifying* -> verdict -> final; error on failure."""
     if not message or not message.strip():
@@ -342,7 +346,7 @@ def sse_turn(
     yield {"type": "status", "stage": "routing",
            "message": "Routing your request...", "session_id": sid}
     try:
-        history = store.get_history(settings.db_path, sid, limit=8)
+        history = store.get_history(settings.db_path, _history_key(sid, owner), limit=8)
         route = router_llm(message, history, settings)
     except RuntimeError as e:
         yield {"type": "error", "error": _sanitize(str(e), settings), "session_id": sid}
@@ -364,8 +368,8 @@ def sse_turn(
                 f"Router note: {route.get('note', '')}"
             )
             reply = composer_llm(message, history, trace_summary, settings)
-            store.save_turn(settings.db_path, sid, "user", message)
-            store.save_turn(settings.db_path, sid, "assistant", reply)
+            store.save_turn(settings.db_path, _history_key(sid, owner), "user", message)
+            store.save_turn(settings.db_path, _history_key(sid, owner), "assistant", reply)
             yield {"type": "final", "reply": reply, "status": "direct",
                    "run_id": None, "selected_candidate": None,
                    "verification": None, "attempts": [], "session_id": sid}
@@ -405,8 +409,8 @@ def sse_turn(
     try:
         trace_summary = _trace_summary_for_record(rec)
         reply = _with_status_summary(composer_llm(message, history, trace_summary, settings), rec)
-        store.save_turn(settings.db_path, sid, "user", message)
-        store.save_turn(settings.db_path, sid, "assistant", reply)
+        store.save_turn(settings.db_path, _history_key(sid, owner), "user", message)
+        store.save_turn(settings.db_path, _history_key(sid, owner), "assistant", reply)
     except RuntimeError as e:
         yield {"type": "error", "error": _sanitize(str(e), settings), "session_id": sid}
         return

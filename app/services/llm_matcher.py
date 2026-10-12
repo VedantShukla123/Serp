@@ -93,7 +93,14 @@ def rank_candidates(
             for rc in ranked:
                 if rc.candidate_id not in valid_ids:
                     raise ValueError(f"unknown candidate_id {rc.candidate_id}")
-            ranked_sorted = sorted(ranked, key=lambda x: x.rank)
+            if not ranked:
+                raise ValueError("empty ranking for a non-empty candidate list")
+            # a candidate listed twice keeps its best rank (never verified — or paid for — twice)
+            ranked_sorted, seen = [], set()
+            for rc in sorted(ranked, key=lambda x: x.rank):
+                if rc.candidate_id not in seen:
+                    seen.add(rc.candidate_id)
+                    ranked_sorted.append(rc)
             return RankingResult(ranked_candidates=ranked_sorted, model=settings.llm_model, mocked=False), {"model": settings.llm_model, "attempts": attempt + 1}
         except Exception as e:  # validation error / API failure -> controlled retry, then raise
             last_err = str(e)

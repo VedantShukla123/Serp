@@ -180,3 +180,16 @@ def test_verified_booking_is_stored_and_retrievable(client: TestClient) -> None:
     assert client.get("/v1/bookings/SIM-NOPE").status_code == 404
     # existing run routes untouched by the bookings table
     assert client.get("/v1/runs/run-goa").status_code == 200
+
+
+def test_stored_verified_label_is_rechecked_against_recorded_verdicts() -> None:
+    """Regression: a run saved as VERIFIED whose verdicts never covered a required point (older
+    verifier bug) is not bookable without acknowledgement; an unknown status label never counts."""
+    run = {**RUN, "attempts": [_attempt("c2", "VERIFIED", [("budget", "SATISFIED"), ("budget", "SATISFIED"), ("guests", "SATISFIED")])]}
+    ctx = booking.booking_context(run, "c2")
+    assert ctx["verification_status"] == "UNVERIFIED" and ctx["requires_acknowledgement"] is True
+    contradicted = {**RUN, "attempts": [_attempt("c2", "VERIFIED", [("budget", "SATISFIED"), ("guests", "SATISFIED"), ("beachfront", "CONTRADICTED")])]}
+    assert booking.booking_context(contradicted, "c2")["bookable"] is False
+    weird = {**RUN, "attempts": [_attempt("c2", "verified", [("budget", "SATISFIED"), ("guests", "SATISFIED"), ("beachfront", "SATISFIED")])]}
+    assert booking.booking_context(weird, "c2")["requires_acknowledgement"] is True
+    assert booking.booking_context(RUN, "c2")["verification_status"] == "VERIFIED"   # genuine record unchanged

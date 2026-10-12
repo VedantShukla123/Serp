@@ -1,7 +1,7 @@
 """Small synchronous REST client for a local ProofGate API (app/api/routes.py).
 
 Only wraps endpoints that exist. A local development server needs no sign-in; a deployed
-demo requires a bearer token from POST /v1/auth/login (pass `token=` or call `login()`).
+server requires an account: call `login(email, password)` / `register(...)`, or pass `token=`.
 Uses httpx, already a ProofGate dependency.
 """
 from __future__ import annotations
@@ -62,11 +62,27 @@ class ProofGateClient:
         if token:
             self._http.headers["Authorization"] = f"Bearer {token}"
 
-    def login(self, password: str) -> dict:
-        """Exchange the shared demo password for a short-lived session token (used for later calls)."""
-        out = self._request("POST", "/v1/auth/login", json={"password": password})
+    def login(self, email: str, password: str) -> dict:
+        """Sign in to your ProofGate account; the short-lived token is used for later calls."""
+        out = self._request("POST", "/v1/auth/login", json={"email": email, "password": password})
         self._http.headers["Authorization"] = f"Bearer {out['token']}"
         return out
+
+    def register(self, name: str, email: str, password: str) -> dict:
+        """Create an account (password: 10–128 characters) and sign in to it."""
+        out = self._request("POST", "/v1/auth/register", json={"name": name, "email": email, "password": password})
+        self._http.headers["Authorization"] = f"Bearer {out['token']}"
+        return out
+
+    def me(self) -> dict:
+        """GET /v1/auth/me → {user_id, name, email, created_at} for the signed-in account."""
+        return self._request("GET", "/v1/auth/me")
+
+    def logout(self) -> None:
+        """Revoke the current token on the server and stop sending it."""
+        if "Authorization" in self._http.headers:
+            self._request("POST", "/v1/auth/logout")
+            del self._http.headers["Authorization"]
 
     # -- plumbing ------------------------------------------------------------
     def _request(self, method: str, path: str, *, json: Any = None, params: dict | None = None,

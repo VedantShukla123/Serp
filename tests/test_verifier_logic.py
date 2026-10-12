@@ -161,3 +161,108 @@ def test_ranker_prompt_forbids_requirement_claims_in_reasons(monkeypatch: pytest
     assert [rc.candidate_id for rc in ranking.ranked_candidates] == ["c1"]
     assert 'never say it "meets all requirements"' in seen["system"]
     assert "Never state that it meets, satisfies or includes a requirement" in seen["system"]
+
+
+def test_verified_requires_a_verdict_for_every_required_requirement() -> None:
+    """Regression: a verdict list that skips a requirement (duplicate or mislabelled ids, same
+    count) must never yield VERIFIED."""
+    reqs = [Requirement(id="r1", description="budget"), Requirement(id="r2", description="beachfront"),
+            Requirement(id="r3", description="nice view", importance="preferred")]
+    V = RequirementVerdict
+    dup = [V(requirement_id="r1", status="SATISFIED"), V(requirement_id="r1", status="SATISFIED")]
+    wrong_ids = [V(requirement_id="1", status="SATISFIED"), V(requirement_id="2", status="SATISFIED")]
+    assert jev_verifier.overall_status(reqs, dup) == "UNVERIFIED"
+    assert jev_verifier.overall_status(reqs, wrong_ids) == "UNVERIFIED"
+    complete = [V(requirement_id="r1", status="SATISFIED"), V(requirement_id="r2", status="SATISFIED")]
+    assert jev_verifier.overall_status(reqs, complete) == "VERIFIED"      # preferred r3 may stay unjudged
+    assert jev_verifier.overall_status(reqs, complete[:1] + [V(requirement_id="r2", status="CONTRADICTED")]) == "REJECTED"
+
+
+def test_llm_verifier_marks_skipped_requirements_unknown(monkeypatch: pytest.MonkeyPatch) -> None:
+    import json as _json
+
+    import httpx
+    reqs = [Requirement(id="r1", description="budget"), Requirement(id="r2", description="beachfront")]
+    content = _json.dumps({"verdicts": [{"requirement_id": "r1", "status": "SATISFIED", "reason": "x"},
+                                        {"requirement_id": "r1", "status": "SATISFIED", "reason": "dup"}]})
+    transport = httpx.MockTransport(lambda req: httpx.Response(200, json={"choices": [{"message": {"content": content}}]}))
+    real = httpx.Client
+    monkeypatch.setattr(jev_verifier.httpx, "Client", lambda **kw: real(transport=transport, **kw))
+    s = Settings(serpapi_api_key="", llm_api_key="k", jev_api_key="", jev_endpoint="")
+    res = jev_verifier.verify_candidate(reqs, Candidate(candidate_id="c1", name="Hotel"), s)
+    assert res.overall_status == "UNVERIFIED"
+    r2 = [v for v in res.requirements if v.requirement_id == "r2"]
+    assert len(r2) == 1 and r2[0].status == "UNKNOWN"
+
+
+def _mock_llm(monkeypatch: pytest.MonkeyPatch, module, payload: dict, calls: list | None = None) -> None:
+    import json as _json
+
+    import httpx
+    content = _json.dumps(payload)
+
+    def handler(req):
+        if calls is not None:
+            calls.append(1)
+        return httpx.Response(200, json={"choices": [{"message": {"content": content}}]})
+    real = httpx.Client
+    monkeypatch.setattr(module.httpx, "Client", lambda **kw: real(transport=httpx.MockTransport(handler), **kw))
+
+
+def test_ranking_drops_duplicate_candidates(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Regression: an LLM ranking that lists a candidate twice made the pipeline verify (and pay for) it twice."""
+    _mock_llm(monkeypatch, llm_matcher, {"ranked_candidates": [
+        {"candidate_id": "c2", "rank": 3}, {"candidate_id": "c1", "rank": 1}, {"candidate_id": "c1", "rank": 2}]})
+    s = Settings(serpapi_api_key="", llm_api_key="k", jev_api_key="", jev_endpoint="")
+    cands = [Candidate(candidate_id="c1", name="A"), Candidate(candidate_id="c2", name="B")]
+    ranking, _ = llm_matcher.rank_candidates("q", [Requirement(id="r", description="d")], cands, s)
+    assert [r.candidate_id for r in ranking.ranked_candidates] == ["c1", "c2"]
+
+
+def test_empty_ranking_is_invalid_output_not_a_no_match(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Regression: an empty ranking for real candidates ended the run as no_verified_match with
+    nothing verified. It is now retried once, then fails loudly."""
+    calls: list = []
+    _mock_llm(monkeypatch, llm_matcher, {"ranked_candidates": []}, calls)
+    s = Settings(serpapi_api_key="", llm_api_key="k", jev_api_key="", jev_endpoint="")
+    with pytest.raises(RuntimeError, match="empty ranking"):
+        llm_matcher.rank_candidates("q", [Requirement(id="r", description="d")], [Candidate(candidate_id="c1", name="A")], s)
+    assert len(calls) == 2
+
+
+def test_duplicate_requirement_ids_cannot_share_a_verdict(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Regression: two parsed requirements with the same id sent ONE Jev question, and its answer
+    was recorded for both (an unchecked 'beachfront' came out SATISFIED)."""
+    import json as _json
+
+    import httpx
+    parsed = _json.dumps({"requirements": [
+        {"id": "r1", "description": "under Rs 10,000"}, {"id": "r1", "description": "beachfront"}, {"id": " ", "description": "2 guests"}]})
+    asked: list[list[str]] = []
+
+    def handler(req):
+        if req.url.host == "jev.test":
+            q = _json.loads(req.content)["questions"]
+            asked.append(list(q))
+            return httpx.Response(200, json={"answers": {k: {"noul": 0.95 if k == "r1" else 0.5} for k in q}})
+        return httpx.Response(200, json={"choices": [{"message": {"content": parsed}}]})
+    real = httpx.Client
+    monkeypatch.setattr(httpx, "Client", lambda **kw: real(transport=httpx.MockTransport(handler), **kw))
+    s = Settings(serpapi_api_key="", llm_api_key="k", jev_api_key="j", jev_endpoint="https://jev.test")
+    reqs = requirement_parser.parse_requirements("hotel", s).requirements
+    assert len({r.id for r in reqs}) == 3 and all(r.id.strip() for r in reqs)
+    res = jev_verifier.verify_candidate(reqs, Candidate(candidate_id="c", name="Inland hotel"), s)
+    assert asked == [[r.id for r in reqs]]
+    assert res.overall_status == "UNVERIFIED"
+    with pytest.raises(ValueError, match="unique"):
+        jev_verifier.verify_candidate([Requirement(id="a", description="x"), Requirement(id="a", description="y")],
+                                      Candidate(candidate_id="c", name="n"), s)
+
+
+def test_rest_verify_rejects_duplicate_requirement_ids() -> None:
+    from fastapi.testclient import TestClient
+
+    from app.main import app
+    body = {"requirements": [{"id": "a", "description": "x"}, {"id": "a", "description": "y"}],
+            "candidate": {"candidate_id": "c", "name": "n"}}
+    assert TestClient(app).post("/v1/verify", json=body).status_code == 422

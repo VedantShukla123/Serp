@@ -42,9 +42,14 @@ def overall_status(requirements: list[Requirement], verdicts: list[RequirementVe
         return "REJECTED"
     if any(v.status == "UNKNOWN" for v in required):
         return "UNVERIFIED"
+    # VERIFIED only when EVERY required requirement has its own SATISFIED verdict: a verifier
+    # that skips a requirement (or repeats/mislabels ids) must not produce a verified result.
+    judged = {v.requirement_id for v in verdicts}
+    if any(r.importance == "required" and r.id not in judged for r in requirements):
+        return "UNVERIFIED"
     if required and all(v.status == "SATISFIED" for v in required):
         return "VERIFIED"
-    return "UNVERIFIED" if not required else "VERIFIED"
+    return "UNVERIFIED"
 
 
 def _llm_verify(requirements: list[Requirement], candidate: Candidate, settings: Settings) -> VerificationResult:
@@ -77,6 +82,10 @@ def _llm_verify(requirements: list[Requirement], candidate: Candidate, settings:
         raise RuntimeError(
             f"jev returned {len(verdicts)} verdicts for {len(requirements)} requirements"
         )
+    judged = {v.requirement_id for v in verdicts}
+    verdicts += [RequirementVerdict(requirement_id=r.id, status="UNKNOWN",
+                                    reason="The verifier returned no verdict for this requirement.")
+                 for r in requirements if r.id not in judged]
     return VerificationResult(
         candidate_id=candidate.candidate_id,
         overall_status=overall_status(requirements, verdicts),
@@ -167,6 +176,9 @@ def _external_jev(requirements: list[Requirement], candidate: Candidate, setting
 def verify_candidate(requirements: list[Requirement], candidate: Candidate, settings: Settings) -> VerificationResult:
     """Real adjudication only. Raises RuntimeError when no Jev-capable
     credential is configured — never fabricates verdicts."""
+    ids = [r.id for r in requirements]
+    if len(set(ids)) != len(ids):
+        raise ValueError("requirement ids must be unique (verdicts are matched to requirements by id)")
     if settings.has_jev:
         return _external_jev(requirements, candidate, settings)
     if settings.has_llm:

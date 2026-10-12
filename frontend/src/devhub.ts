@@ -74,22 +74,23 @@ export function example(ex: Ex, shell: Shell): string {
   return `$body = ${psValue(ex.body ?? {}, '')} | ConvertTo-Json -Depth 10\n$res = Invoke-RestMethod -Method Post -Uri ${psStr(url)}${h} \`\n  -ContentType "application/json" -Body $body\nConvertTo-Json -Depth 10 -InputObject $res`
 }
 
-/** Demo sign-in: prompts for the shared demo password (never written into the command) and stores
+/** Account sign-in: prompts for your email and password (never written into the command) and stores
     the short-lived token from POST /v1/auth/login in PROOFGATE_TOKEN for the other examples. */
 export function loginExample(shell: Shell): string {
   const url = API_BASE + '/v1/auth/login'
   if (shell === 'bash') return [
-    `read -rsp 'Demo password: ' PG_PW; echo`,
-    `export PROOFGATE_TOKEN=$(PG_PW="$PG_PW" python -c 'import json,os; print(json.dumps({"password": os.environ["PG_PW"]}))' \\`,
+    `read -rp 'Email: ' PG_EMAIL; read -rsp 'Password: ' PG_PW; echo`,
+    `export PROOFGATE_TOKEN=$(PG_EMAIL="$PG_EMAIL" PG_PW="$PG_PW" python -c 'import json,os; print(json.dumps({"email": os.environ["PG_EMAIL"], "password": os.environ["PG_PW"]}))' \\`,
     `  | curl -s -X POST ${q(url)} -H 'Content-Type: application/json' -d @- \\`,
     `  | python -c 'import json,sys; print(json.load(sys.stdin)["token"])')`,
     `unset PG_PW`,
   ].join('\n')
   return [
-    `$pw = Read-Host 'Demo password' -AsSecureString`,
+    `$email = Read-Host 'Email'`,
+    `$pw = Read-Host 'Password' -AsSecureString`,
     `$plain = [Runtime.InteropServices.Marshal]::PtrToStringAuto([Runtime.InteropServices.Marshal]::SecureStringToBSTR($pw))`,
     `$env:PROOFGATE_TOKEN = (Invoke-RestMethod -Method Post -Uri ${psStr(url)} \``,
-    `  -ContentType "application/json" -Body (@{ password = $plain } | ConvertTo-Json)).token`,
+    `  -ContentType "application/json" -Body (@{ email = $email; password = $plain } | ConvertTo-Json)).token`,
     `Remove-Variable plain, pw`,
   ].join('\n')
 }

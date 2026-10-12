@@ -2,7 +2,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 
-import { bashPayload, checkRunId, describeError, example, latestGuard, statusCounts, traceRows } from './devhub.ts'
+import { bashPayload, checkRunId, describeError, example, latestGuard, loginExample, statusCounts, traceRows } from './devhub.ts'
 
 const FIND = { method: 'POST' as const, path: '/v1/find-and-verify', body: { request: "Hotel in Goa, sea view, it's fine", action: 'book_hotel', max_candidates: 5 } }
 
@@ -27,7 +27,29 @@ test('PowerShell examples never use the curl alias or hand-quoted JSON', () => {
 test('PowerShell lists array endpoints as a table (no {value, Count} wrapper)', () => {
   assert.equal(example({ method: 'GET', path: '/v1/runs?limit=5', table: ['run_id', 'created_at', 'request'] }, 'powershell'),
     '(Invoke-RestMethod "http://localhost:8000/v1/runs?limit=5" -Headers @{ Authorization = "Bearer $env:PROOFGATE_TOKEN" }) | Format-Table run_id, created_at, request -AutoSize')
-  assert.equal(example({ method: 'GET', path: '/v1/runs?limit=5', table: ['run_id'] }, 'bash'), "curl -s 'http://localhost:8000/v1/runs?limit=5'")
+  assert.equal(example({ method: 'GET', path: '/v1/runs?limit=5', table: ['run_id'] }, 'bash'), `curl -s -H "Authorization: Bearer $PROOFGATE_TOKEN" 'http://localhost:8000/v1/runs?limit=5'`)
+})
+
+test('protected examples send the bearer token; public ones do not', () => {
+  for (const shell of ['bash', 'powershell'] as const) {
+    for (const ex of [FIND, { method: 'GET' as const, path: '/v1/runs/abc/evidence' }, { method: 'GET' as const, path: '/v1/agent/chat/stream?message=hi', stream: true }]) {
+      assert.match(example(ex, shell), /Authorization\s*[:=]\s*"?Bearer \$(env:)?PROOFGATE_TOKEN/, `${shell} ${ex.path}`)
+    }
+    assert.doesNotMatch(example({ method: 'GET', path: '/health' }, shell), /Authorization/)
+  }
+  assert.deepEqual(bashPayload(example(FIND, 'bash')), FIND.body)        // header line does not break the payload
+})
+
+test('login example: real route, email + password fields, prompts for both and never embeds a credential', () => {
+  for (const shell of ['bash', 'powershell'] as const) {
+    const cmd = loginExample(shell)
+    assert.match(cmd, /http:\/\/localhost:8000\/v1\/auth\/login/)
+    assert.match(cmd, /"?email"?\s*[:=]/)
+    assert.match(cmd, /"?password"?\s*[:=]/)
+    assert.match(cmd, /PROOFGATE_TOKEN/)
+    assert.match(cmd, shell === 'bash' ? /read -rp 'Email: '.*read -rsp 'Password: '/ : /Read-Host 'Email'[\s\S]*Read-Host 'Password' -AsSecureString/)
+    assert.doesNotMatch(cmd, /demo/i)
+  }
 })
 
 test('PowerShell escapes $ and quotes inside strings', () => {

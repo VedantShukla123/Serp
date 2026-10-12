@@ -56,6 +56,15 @@ def parse_requirements(request: str, settings: Settings) -> ParsedRequest:
         reqs = [Requirement(**x) for x in data.get("requirements", [])]
         if not reqs:
             raise ValueError("LLM returned no requirements")
+        # Verdicts are matched to requirements by id: duplicate or blank ids would let one
+        # verdict stand in for another requirement, so make every id unique.
+        seen: set[str] = set()
+        for i, r in enumerate(reqs, 1):
+            rid = r.id.strip() or f"req_{i}"
+            while rid in seen:
+                rid = f"{rid}_{i}"
+            seen.add(rid)
+            r.id = rid
         return ParsedRequest(request=request, requirements=reqs)
     except RuntimeError:
         raise

@@ -69,7 +69,8 @@ export default function Composer({ value, onChange, onSubmit, disabled, placehol
         <input
           ref={inputRef}
           value={value}
-          onChange={(e) => onChange(e.target.value)}
+          maxLength={2000}            // same limit as the API (MAX_REQUEST_CHARS)
+          onChange={(e) => onChange(e.target.value.slice(0, 2000))}
           onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); if (!disabled && value.trim()) onSubmit() } }}
           placeholder={listening ? 'Listening… speak your request' : placeholder}
           aria-label={placeholder}

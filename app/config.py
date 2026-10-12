@@ -45,9 +45,8 @@ class Settings:
     jev_contradicted_below: float = 0.25
     jev_timeout_s: int = 60
     proofgate_api_key: str = ""   # legacy setting; not used for auth (see app/security.py)
-    production: bool = False      # PROOFGATE_ENV=production -> auth required, fail closed
-    demo_password: str = ""       # PROOFGATE_DEMO_PASSWORD (shared demo access password)
-    session_secret: str = ""      # PROOFGATE_SESSION_SECRET (HMAC key for session tokens)
+    production: bool = False      # PROOFGATE_ENV=production -> user accounts required, fail closed
+    session_secret: str = ""      # PROOFGATE_SESSION_SECRET (HMAC key for session tokens; setting it enables accounts)
     session_ttl_min: int = 120
     requests_per_min: int = 120   # per signed-in session, all /v1 calls
     spend_per_session: int = 10   # live search/verification calls per session per window
@@ -68,6 +67,14 @@ class Settings:
     @property
     def has_jev(self) -> bool:
         return bool(self.jev_endpoint and self.jev_api_key)
+
+    def redact(self, text: str) -> str:
+        """Remove every configured secret from text that may leave the server (error details)."""
+        for secret in (self.serpapi_api_key, self.llm_api_key, self.jev_api_key, self.proofgate_api_key,
+                       self.session_secret):
+            if secret:
+                text = text.replace(secret, "***")
+        return text
 
 
 def load_settings() -> Settings:
@@ -104,7 +111,6 @@ def load_settings() -> Settings:
         db_path=_get("PROOFGATE_DB_PATH", "./proofgate.db"),
         allowed_origins=parse_origins(_get("PROOFGATE_ALLOWED_ORIGINS", DEV_ORIGINS)),
         production=_get("PROOFGATE_ENV").lower() == "production",
-        demo_password=_get("PROOFGATE_DEMO_PASSWORD"),
         session_secret=_get("PROOFGATE_SESSION_SECRET"),
         session_ttl_min=_int("PROOFGATE_SESSION_TTL_MIN", 120, 5, 1440),
         requests_per_min=_int("PROOFGATE_REQUESTS_PER_MIN", 120, 10, 10000),

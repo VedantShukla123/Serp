@@ -61,8 +61,8 @@ export const INTEGRATIONS: Integration[] = [
 from proofgate_client import ProofGateClient, ProofGateNotFound
 
 with ProofGateClient("${API_BASE}") as pg:
-    if pg.auth_status()["auth_required"]:  # deployed demo: shared demo password -> short-lived token
-        pg.login(getpass("Demo password: "))
+    if pg.auth_status()["auth_required"]:  # deployed server: your account -> short-lived token
+        pg.login(input("Email: "), getpass("Password: "))
     print(pg.health()["ready"])
     runs = pg.list_runs(limit=1)          # free; empty on a fresh server
     if runs:

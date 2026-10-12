@@ -1,16 +1,19 @@
-"""Demo access control + spend protection (standard library only).
+"""User accounts, sessions and spend protection.
 
 Modes (see auth_mode):
-  off            no PROOFGATE_DEMO_PASSWORD and not production -> local development, no login
-  on             demo password + session secret configured -> every /v1 route needs a bearer token
-  misconfigured  production (PROOFGATE_ENV=production) or a password is set, but the password
-                 or secret is missing/too weak -> fail closed: protected routes and login return 503
+  off            not production and no PROOFGATE_SESSION_SECRET -> local development only: no sign-in,
+                 one unscoped local workspace (every stored run is visible, as before accounts existed)
+  on             session secret configured (>= 32 chars) -> every /v1 route needs a user's bearer token,
+                 and every run / booking / order is scoped to that user
+  misconfigured  production (PROOFGATE_ENV=production) without a strong session secret -> fail closed:
+                 protected routes and account endpoints return 503. Production can never be "off".
 
-Tokens: base64url(JSON {sid, exp}) + "." + base64url(HMAC-SHA256(secret, payload)). Short-lived,
-verified in constant time, revocable on logout (in memory). Passwords and tokens are never logged.
+Passwords: Argon2id (argon2-cffi), OWASP parameters (19 MiB, t=2, p=1). Never stored or logged in clear.
+Tokens: base64url(JSON {sid, uid, exp}) + "." + base64url(HMAC-SHA256(secret, payload)). Short-lived,
+verified in constant time, tied to an existing user, revocable on logout (persisted in the database).
 
-Limits are IN MEMORY: they reset when the process restarts and are per instance. They bound abuse
-of a demo; they are not a permanent cost cap — set spending limits at SerpApi / your LLM provider too.
+Limits are IN MEMORY: they reset when the process restarts and are per instance. They bound abuse; they
+are not a permanent cost cap — set spending limits at SerpApi / your LLM provider too.
 """
 from __future__ import annotations
 
@@ -25,11 +28,13 @@ from collections import deque
 from dataclasses import dataclass
 from typing import Literal
 
+from argon2 import PasswordHasher
+from argon2.exceptions import InvalidHashError, VerificationError, VerifyMismatchError
 from fastapi import HTTPException, Request
 
 from app.config import Settings
+from app.storage import store
 
-MIN_PASSWORD_LEN = 12
 MIN_SECRET_LEN = 32
 AuthMode = Literal["off", "on", "misconfigured"]
 
@@ -44,12 +49,37 @@ def _settings() -> Settings:
 
 
 def auth_mode(s: Settings) -> AuthMode:
-    wants = s.production or bool(s.demo_password)
+    wants = s.production or bool(s.session_secret)
     if not wants:
         return "off"
-    if len(s.demo_password) < MIN_PASSWORD_LEN or len(s.session_secret) < MIN_SECRET_LEN:
+    if len(s.session_secret) < MIN_SECRET_LEN:
         return "misconfigured"
     return "on"
+
+
+# ------------------------------------------------------------------ passwords
+
+_hasher = PasswordHasher(time_cost=2, memory_cost=19456, parallelism=1)   # Argon2id, OWASP 2023
+# Verified when the email is unknown, so a login takes about as long either way (no account probing by timing).
+_DUMMY_HASH = _hasher.hash(secrets.token_urlsafe(16))
+
+
+def hash_password(password: str) -> str:
+    return _hasher.hash(password)
+
+
+def check_password(stored_hash: str | None, password: str) -> bool:
+    try:
+        return _hasher.verify(stored_hash or _DUMMY_HASH, password) and stored_hash is not None
+    except (VerifyMismatchError, VerificationError, InvalidHashError):
+        return False
+
+
+def needs_rehash(stored_hash: str) -> bool:
+    try:
+        return _hasher.check_needs_rehash(stored_hash)
+    except InvalidHashError:
+        return False
 
 
 # ------------------------------------------------------------------ tokens
@@ -66,34 +96,48 @@ def _sign(secret: str, payload: str) -> str:
     return _b64(hmac.new(secret.encode(), payload.encode(), hashlib.sha256).digest())
 
 
-def issue_token(s: Settings, now: float | None = None) -> tuple[str, int, str]:
+def issue_token(s: Settings, user_id: str, now: float | None = None) -> tuple[str, int, str]:
     now = time.time() if now is None else now
     exp = int(now + s.session_ttl_min * 60)
     sid = secrets.token_urlsafe(12)
-    payload = _b64(json.dumps({"sid": sid, "exp": exp}, separators=(",", ":")).encode())
+    payload = _b64(json.dumps({"sid": sid, "uid": user_id, "exp": exp}, separators=(",", ":")).encode())
     return f"{payload}.{_sign(s.session_secret, payload)}", exp, sid
 
 
-def verify_token(s: Settings, token: str, now: float | None = None) -> str | None:
-    """Session id for a valid, unexpired, unrevoked token; None otherwise."""
+@dataclass(frozen=True)
+class TokenClaims:
+    sid: str
+    uid: str
+    exp: int
+
+
+def read_token(s: Settings, token: str, now: float | None = None) -> TokenClaims | None:
+    """Claims of a correctly signed, unexpired, unrevoked token; None otherwise."""
     try:
         payload, sig = token.split(".", 1)
         if not hmac.compare_digest(sig, _sign(s.session_secret, payload)):
             return None
         data = json.loads(_unb64(payload))
-        sid, exp = str(data["sid"]), int(data["exp"])
+        claims = TokenClaims(sid=str(data["sid"]), uid=str(data["uid"]), exp=int(data["exp"]))
     except Exception:
         return None
-    if (time.time() if now is None else now) >= exp or _revoked.is_revoked(sid):
+    if (time.time() if now is None else now) >= claims.exp or is_revoked(s, claims.sid):
         return None
-    return sid
+    return claims
 
 
-def password_ok(s: Settings, supplied: str) -> bool:
-    # hash both sides so the comparison is constant-time regardless of length
-    a = hashlib.sha256(supplied.encode()).digest()
-    b = hashlib.sha256(s.demo_password.encode()).digest()
-    return hmac.compare_digest(a, b)
+def is_revoked(s: Settings, sid: str) -> bool:
+    return _revoked.is_revoked(sid) or store.is_session_revoked(s.db_path, sid)
+
+
+def revoke(s: Settings, claims: TokenClaims) -> None:
+    _revoked.add(claims.sid, claims.exp)
+    store.revoke_session(s.db_path, claims.sid, claims.exp)
+
+
+def bearer(request: Request) -> str:
+    header = request.headers.get("authorization", "")
+    return header[7:].strip() if header.lower().startswith("bearer ") else ""
 
 
 # ------------------------------------------------------------------ in-memory limiters
@@ -126,6 +170,8 @@ class SlidingWindow:
 
 
 class _Revoked:
+    """Fast in-process cache of revoked session ids (the database is the source of truth)."""
+
     def __init__(self) -> None:
         self._sids: dict[str, float] = {}
         self._lock = threading.Lock()
@@ -146,17 +192,20 @@ class _Revoked:
 
 
 failed_logins = SlidingWindow()
+registrations = SlidingWindow()
 requests_window = SlidingWindow()
 spend_window = SlidingWindow()
 _revoked = _Revoked()
 
 LOGIN_WINDOW_S = 15 * 60
 LOGIN_FAILS_PER_CLIENT = 5
+REGISTER_WINDOW_S = 60 * 60
+REGISTRATIONS_PER_CLIENT = 5
 
 
 def reset_limits() -> None:
     """For tests."""
-    for w in (failed_logins, requests_window, spend_window):
+    for w in (failed_logins, registrations, requests_window, spend_window):
         w.reset()
     _revoked.reset()
 
@@ -178,43 +227,58 @@ def _too_many(message: str, retry: float) -> HTTPException:
                          headers={"Retry-After": str(int(retry))})
 
 
-# ------------------------------------------------------------------ FastAPI dependency
+# ------------------------------------------------------------------ FastAPI dependencies
 
-@dataclass
+@dataclass(frozen=True)
 class Session:
-    sid: str          # token session id, or "client:<ip>" when auth is off
+    key: str                  # rate-limit key: "user:<id>", or "client:<ip>" when sign-in is off
+    user_id: str | None       # the signed-in account; None only in local development (auth off)
+    claims: TokenClaims | None = None
+
+    @property
+    def scope(self) -> str | None:
+        """Ownership scope for the store: the user's id, or None (unscoped) in local development."""
+        return self.user_id
+
+
+def _closed() -> HTTPException:
+    return HTTPException(status_code=503, detail={"code": "auth_not_configured", "errors": {},
+                         "message": "Sign-in is not configured on this server, so the API is closed."})
+
+
+def authenticate(request: Request, s: Settings) -> Session:
+    """Who is calling. Raises 401 (no/invalid/expired/revoked token, or deleted account) or 503."""
+    mode = auth_mode(s)
+    if mode == "misconfigured":
+        raise _closed()
+    if mode == "off":
+        return Session(key=f"client:{client_key(request)}", user_id=None)
+    claims = read_token(s, bearer(request))
+    if claims is None or store.get_user(s.db_path, claims.uid) is None:
+        raise HTTPException(status_code=401, detail={"code": "auth_required", "errors": {},
+                            "message": "Your session has ended. Please sign in again."},
+                            headers={"WWW-Authenticate": "Bearer"})
+    return Session(key=f"user:{claims.uid}", user_id=claims.uid, claims=claims)
 
 
 def require_session(request: Request) -> Session:
-    """Router-level dependency for every protected /v1 route: auth + request/spend limits."""
+    """Router-level dependency for every protected /v1 route: identity + request/spend limits.
+    Limits are keyed by ACCOUNT (not by session), so signing in again does not reset them."""
     s = _settings()
-    mode = auth_mode(s)
-    if mode == "misconfigured":
-        raise HTTPException(status_code=503, detail={"code": "auth_not_configured", "errors": {},
-                            "message": "Access control is not configured on this server, so the API is closed."})
-    if mode == "on":
-        header = request.headers.get("authorization", "")
-        token = header[7:].strip() if header.lower().startswith("bearer ") else ""
-        sid = verify_token(s, token) if token else None
-        if not sid:
-            raise HTTPException(status_code=401, detail={"code": "auth_required", "errors": {},
-                                "message": "Sign in with the demo password to use the API."},
-                                headers={"WWW-Authenticate": "Bearer"})
-        key = f"sid:{sid}"
-        retry = requests_window.hit(key, s.requests_per_min, 60)
+    session = authenticate(request, s)
+    if session.user_id is not None:
+        retry = requests_window.hit(session.key, s.requests_per_min, 60)
         if retry:
-            raise _too_many("Too many requests for this session — slow down and try again shortly.", retry)
-    else:
-        key = f"client:{client_key(request)}"
+            raise _too_many("Too many requests for this account — slow down and try again shortly.", retry)
 
     if (request.method, request.url.path) in SPEND_ROUTES:
         window = s.spend_window_min * 60
         if spend_window.count("global", window) >= s.spend_global_max:
-            raise _too_many(f"This demo has reached its limit of {s.spend_global_max} live searches/verifications "
+            raise _too_many(f"This server has reached its limit of {s.spend_global_max} live searches/verifications "
                             f"per {s.spend_window_min} minutes. Try again later — stored runs remain available.", window)
-        retry = spend_window.hit(key, s.spend_per_session, window)
+        retry = spend_window.hit(session.key, s.spend_per_session, window)
         if retry:
-            raise _too_many(f"This session has used its {s.spend_per_session} live searches/verifications for now "
+            raise _too_many(f"This account has used its {s.spend_per_session} live searches/verifications for now "
                             f"(limit per {s.spend_window_min} minutes). Stored runs remain available.", retry)
         spend_window.hit("global", 10**9, window)
-    return Session(sid=key)
+    return session
