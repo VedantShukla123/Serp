@@ -40,12 +40,14 @@ def _call_pipeline(
         return fn(request, action, settings, max_candidates, engine)
 
 
+def _history_key(sid: str, owner: str | None) -> str:
+    """Chat history is stored per account: a client-supplied session_id alone never reaches
+    another user's conversation."""
+    return f"{owner}:{sid}" if owner else sid
+
+
 def _sanitize(text: str, settings: Settings) -> str:
-    safe = text
-    for secret in (settings.serpapi_api_key, settings.llm_api_key, settings.jev_api_key):
-        if secret:
-            safe = safe.replace(secret, "***")
-    return safe
+    return settings.redact(text)
 
 
 def _history_messages(history: list[Any]) -> list[dict]:
@@ -117,6 +119,8 @@ Rules:
 - Explain what was done: how many candidates were searched, how they were ranked, and how Jev verified each requirement one by one. Mention any fallback (best available candidate returned for human review) when the trace summary says so.
 - State VERIFIED only when the trace summary explicitly says the selected candidate is VERIFIED. Otherwise flag the unverified/contradicted points and ask the user to confirm before acting.
 - Never call anything verified unless the trace says VERIFIED. Never invent prices, availability, or verdicts.
+- The trace summary includes code-computed status counts. Use those exact numbers. Never say "all" or "none" of the candidates have a status unless the counts show it, and never describe only the top-ranked candidates as if they were the whole set. If any candidate is REJECTED, say how many and which requirement was contradicted.
+- A code-generated verification status block is appended after your reply; never contradict it.
 - For direct answers (no search), just answer helpfully and briefly offer to search when they are ready."""
 
 
@@ -158,6 +162,54 @@ def composer_llm(
         raise RuntimeError(f"composer failed: {_sanitize(str(e), settings)}")
 
 
+_CANDIDATE_STATUSES = ("VERIFIED", "UNVERIFIED", "REJECTED")
+
+
+def _status_counts(attempts: list[Any]) -> dict[str, int]:
+    """Count Jev overall statuses across every verified attempt."""
+    counts = dict.fromkeys(_CANDIDATE_STATUSES, 0)
+    for a in attempts:
+        ov = getattr(getattr(a, "verification", None), "overall_status", None)
+        if ov in counts:
+            counts[ov] += 1
+    return counts
+
+
+def _status_summary(rec: Any) -> str:
+    """Deterministic status block built from the attempt records.
+
+    Appended verbatim to the chat reply so status accuracy never depends
+    on the composer LLM. Empty when no candidate was verified.
+    """
+    attempts = getattr(rec, "attempts", []) or []
+    if not attempts:
+        return ""
+    counts = _status_counts(attempts)
+    total = getattr(rec, "candidate_count", 0) or len(attempts)
+    lines = [
+        f"Verification status ({len(attempts)} of {total} candidates checked by Jev): "
+        + ", ".join(f"{s} {counts[s]}" for s in _CANDIDATE_STATUSES) + "."
+    ]
+    rejected = [a for a in attempts
+                if getattr(getattr(a, "verification", None), "overall_status", None) == "REJECTED"]
+    if rejected:
+        lines.append("Rejected (a required point was contradicted):")
+        for a in rejected:
+            reqs = getattr(a.verification, "requirements", []) or []
+            contradicted = [getattr(x, "requirement_id", "?") for x in reqs
+                            if getattr(x, "status", None) == "CONTRADICTED"]
+            lines.append(
+                f"- {getattr(a, 'candidate_name', '') or a.candidate_id} ({a.candidate_id}): "
+                f"{', '.join(contradicted) or 'a required point'} contradicted"
+            )
+    return "\n".join(lines)
+
+
+def _with_status_summary(reply: str, rec: Any) -> str:
+    block = _status_summary(rec)
+    return f"{reply}\n\n{block}" if block else reply
+
+
 def _trace_summary_for_record(rec: Any) -> str:
     try:
         status = getattr(rec, "status", "?")
@@ -170,6 +222,9 @@ def _trace_summary_for_record(rec: Any) -> str:
             f"Pipeline status: {status}.",
             f"Searched {count} candidates; ranked {len(ranked)} with the LLM ranker.",
         ]
+        status_block = _status_summary(rec)
+        if status_block:
+            lines.append(status_block)
         order = ", ".join(getattr(rc, "candidate_id", "?") for rc in ranked[:5])
         if order:
             lines.append(f"Rank order (top): {order}.")
@@ -206,6 +261,7 @@ def run_agent_turn(
     session_id: str | None,
     settings: Settings,
     emit: Callable[[dict], None] | None = None,
+    owner: str | None = None,
 ) -> dict:
     """Run one chat turn. Returns {reply, status, run_id, selected_candidate, verification, attempts, session_id}."""
     if not message or not message.strip():
@@ -220,7 +276,7 @@ def run_agent_turn(
         except Exception:
             pass
 
-    history = store.get_history(settings.db_path, sid, limit=8)
+    history = store.get_history(settings.db_path, _history_key(sid, owner), limit=8)
     _emit({"type": "status", "stage": "routing", "message": "Routing your request..."})
     try:
         route = router_llm(message, history, settings)
@@ -240,8 +296,8 @@ def run_agent_turn(
             f"Router note: {route.get('note', '')}"
         )
         reply = composer_llm(message, history, trace_summary, settings)
-        store.save_turn(settings.db_path, sid, "user", message)
-        store.save_turn(settings.db_path, sid, "assistant", reply)
+        store.save_turn(settings.db_path, _history_key(sid, owner), "user", message)
+        store.save_turn(settings.db_path, _history_key(sid, owner), "assistant", reply)
         return {
             "reply": reply,
             "status": "direct",
@@ -256,9 +312,9 @@ def run_agent_turn(
            "message": "Understanding requirements..."})
     rec = _call_pipeline(message, action, settings, 15, engine, _emit)
     trace_summary = _trace_summary_for_record(rec)
-    reply = composer_llm(message, history, trace_summary, settings)
-    store.save_turn(settings.db_path, sid, "user", message)
-    store.save_turn(settings.db_path, sid, "assistant", reply)
+    reply = _with_status_summary(composer_llm(message, history, trace_summary, settings), rec)
+    store.save_turn(settings.db_path, _history_key(sid, owner), "user", message)
+    store.save_turn(settings.db_path, _history_key(sid, owner), "assistant", reply)
 
     selected = getattr(rec, "selected_candidate", None)
     verification = getattr(rec, "verification", None)
@@ -270,6 +326,7 @@ def run_agent_turn(
         "selected_candidate": selected.model_dump() if selected is not None else None,
         "verification": verification.model_dump() if verification is not None else None,
         "attempts": [a.model_dump() for a in attempts],
+        "target_type": getattr(rec, "target_type", None),
         "session_id": sid,
     }
 
@@ -278,6 +335,7 @@ def sse_turn(
     message: str,
     session_id: str | None,
     settings: Settings,
+    owner: str | None = None,
 ) -> Iterator[dict]:
     """Yield SSE event dicts: status -> [status] -> requirements -> searching -> candidates -> ranking -> verifying* -> verdict -> final; error on failure."""
     if not message or not message.strip():
@@ -288,7 +346,7 @@ def sse_turn(
     yield {"type": "status", "stage": "routing",
            "message": "Routing your request...", "session_id": sid}
     try:
-        history = store.get_history(settings.db_path, sid, limit=8)
+        history = store.get_history(settings.db_path, _history_key(sid, owner), limit=8)
         route = router_llm(message, history, settings)
     except RuntimeError as e:
         yield {"type": "error", "error": _sanitize(str(e), settings), "session_id": sid}
@@ -310,8 +368,8 @@ def sse_turn(
                 f"Router note: {route.get('note', '')}"
             )
             reply = composer_llm(message, history, trace_summary, settings)
-            store.save_turn(settings.db_path, sid, "user", message)
-            store.save_turn(settings.db_path, sid, "assistant", reply)
+            store.save_turn(settings.db_path, _history_key(sid, owner), "user", message)
+            store.save_turn(settings.db_path, _history_key(sid, owner), "assistant", reply)
             yield {"type": "final", "reply": reply, "status": "direct",
                    "run_id": None, "selected_candidate": None,
                    "verification": None, "attempts": [], "session_id": sid}
@@ -350,9 +408,9 @@ def sse_turn(
         yield ev
     try:
         trace_summary = _trace_summary_for_record(rec)
-        reply = composer_llm(message, history, trace_summary, settings)
-        store.save_turn(settings.db_path, sid, "user", message)
-        store.save_turn(settings.db_path, sid, "assistant", reply)
+        reply = _with_status_summary(composer_llm(message, history, trace_summary, settings), rec)
+        store.save_turn(settings.db_path, _history_key(sid, owner), "user", message)
+        store.save_turn(settings.db_path, _history_key(sid, owner), "assistant", reply)
     except RuntimeError as e:
         yield {"type": "error", "error": _sanitize(str(e), settings), "session_id": sid}
         return
@@ -369,6 +427,7 @@ def sse_turn(
         "reply": reply,
         "status": getattr(rec, "status", "error"),
         "run_id": getattr(rec, "run_id", None),
+        "target_type": getattr(rec, "target_type", None),
         "selected_candidate": selected.model_dump() if selected is not None else None,
         "verification": verification.model_dump() if verification is not None else None,
         "attempts": [a.model_dump() for a in attempts],

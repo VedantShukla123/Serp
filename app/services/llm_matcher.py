@@ -21,7 +21,8 @@ Rules:
 - Consider the whole candidate, not isolated keywords. Example: "located directly along the coast / private beach access" is stronger beachfront evidence than "5-minute walk to the beach".
 - Prefer candidates supported by available data.
 - Return ONLY valid JSON: {"ranked_candidates": [{"candidate_id": "...", "rank": 1, "reason": "..."}]}.
-- Rank ALL candidates provided, best match first. Do NOT declare anything verified."""
+- Rank ALL candidates provided, best match first. Do NOT declare anything verified.
+- Each "reason" explains only why the candidate looks relevant or promising. Never state that it meets, satisfies or includes a requirement, and never say it "meets all requirements" — a separate verifier decides that."""
 
 
 def _candidate_payload(c: Candidate) -> dict:
@@ -92,7 +93,14 @@ def rank_candidates(
             for rc in ranked:
                 if rc.candidate_id not in valid_ids:
                     raise ValueError(f"unknown candidate_id {rc.candidate_id}")
-            ranked_sorted = sorted(ranked, key=lambda x: x.rank)
+            if not ranked:
+                raise ValueError("empty ranking for a non-empty candidate list")
+            # a candidate listed twice keeps its best rank (never verified — or paid for — twice)
+            ranked_sorted, seen = [], set()
+            for rc in sorted(ranked, key=lambda x: x.rank):
+                if rc.candidate_id not in seen:
+                    seen.add(rc.candidate_id)
+                    ranked_sorted.append(rc)
             return RankingResult(ranked_candidates=ranked_sorted, model=settings.llm_model, mocked=False), {"model": settings.llm_model, "attempts": attempt + 1}
         except Exception as e:  # validation error / API failure -> controlled retry, then raise
             last_err = str(e)

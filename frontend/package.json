@@ -6,7 +6,8 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "test": "node --test src/traceEvents.test.ts src/booking.test.ts src/appTests.test.ts src/devhub.test.ts src/actionTypes.test.ts src/playgroundView.test.ts src/apiCatalog.test.ts src/mcpSetup.test.ts src/sdkCatalog.test.ts src/landingContent.test.ts src/api.test.ts"
   },
   "dependencies": {
     "@react-three/drei": "^9.122.0",

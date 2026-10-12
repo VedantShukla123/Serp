@@ -4,7 +4,12 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
+
+# Input bounds for the credit-spending endpoints (same limits as the MCP tools in app/mcp/server.py).
+MAX_REQUEST_CHARS = 2000
+MAX_CANDIDATES = 50
+MAX_REQUIREMENTS = 30
 
 RequirementImportance = Literal["required", "preferred"]
 RequirementStatus = Literal["SATISFIED", "CONTRADICTED", "UNKNOWN"]
@@ -122,15 +127,30 @@ class AttemptRecord(BaseModel):
 
 
 class FindAndVerifyRequest(BaseModel):
-    request: str
-    action: str = "search"
-    max_candidates: int = 15
-    engine: str | None = None
+    request: str = Field(min_length=3, max_length=MAX_REQUEST_CHARS)
+    action: str = Field("search", max_length=64)
+    max_candidates: int = Field(15, ge=1, le=MAX_CANDIDATES)
+    engine: str | None = Field(None, pattern=r"^[a-z_]{1,40}$")
+
+    @field_validator("request")
+    @classmethod
+    def _not_blank(cls, v: str) -> str:
+        if len(v.strip()) < 3:
+            raise ValueError("request must contain at least 3 non-space characters")
+        return v.strip()
 
 
 class VerifyRequest(BaseModel):
-    requirements: list[Requirement]
+    requirements: list[Requirement] = Field(min_length=1, max_length=MAX_REQUIREMENTS)
     candidate: Candidate
+
+    @field_validator("requirements")
+    @classmethod
+    def _unique_ids(cls, v: list[Requirement]) -> list[Requirement]:
+        ids = [r.id for r in v]
+        if len(set(ids)) != len(ids):
+            raise ValueError("requirement ids must be unique")
+        return v
 
 
 class FindAndVerifyResponse(BaseModel):
@@ -150,8 +170,36 @@ class FindAndVerifyResponse(BaseModel):
     errors: list[str] = Field(default_factory=list)
     mocked: bool = False
     created_at: str = ""
+    # hotel | product | place | generic — from the search engine (see app/services/actions.py).
+    # Optional so runs stored before this field existed still load.
+    target_type: str | None = None
 
 
 class RunRecord(FindAndVerifyResponse):
     candidates: list[Candidate] = Field(default_factory=list)
     raw_serpapi: Any = None
+
+
+class BookingRequest(BaseModel):
+    """Simulated booking input. Hotel identity and price are resolved server-side
+    from the stored run by candidate_id — the client never supplies them."""
+    run_id: str
+    candidate_id: str
+    guest_name: str = ""
+    email: str = ""
+    guests: int | None = None
+    check_in: str = ""
+    check_out: str = ""
+    acknowledge_unverified: bool = False
+
+
+class OrderRequest(BaseModel):
+    """Simulated product order input. Product identity and price are resolved
+    server-side from the stored run by candidate_id — never taken from the client."""
+    run_id: str
+    candidate_id: str
+    buyer_name: str = ""
+    email: str = ""
+    quantity: int | None = None
+    delivery_address: str = ""
+    acknowledge_unverified: bool = False

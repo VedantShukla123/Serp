@@ -22,6 +22,8 @@ from app.models.schemas import (
     VerificationResult,
 )
 
+MAX_CONSECUTIVE_FAILURES = 2   # verifier errors in a row before giving up on the rest
+
 
 def decide(
     requirements: list[Requirement],
@@ -31,15 +33,27 @@ def decide(
 ) -> tuple[Candidate | None, VerificationResult | None, list[AttemptRecord], str]:
     """Returns (selected, verification, attempts, status).
 
-    status is 'verified' | 'no_verified_match'. Technical errors from
-    verify_fn propagate (never converted into verification).
+    status is 'verified' | 'needs_human_review' | 'no_verified_match'. A technical error
+    on one candidate is never converted into a verdict: that candidate is skipped (it
+    stays unchecked, so any action on it needs human review; the caller records the
+    error) and the next one is tried. After MAX_CONSECUTIVE_FAILURES in a row the verifier is
+    treated as down and the loop stops. If no candidate could be checked at all, the error propagates.
     """
     attempts: list[AttemptRecord] = []
+    failure: Exception | None = None
+    consecutive = 0
     for rc in ranked:
         cand = by_id.get(rc.candidate_id)
         if cand is None:
             continue
-        verification = verify_fn(cand)  # may raise -> caller maps to error status
+        try:
+            verification = verify_fn(cand)
+        except Exception as e:
+            failure, consecutive = e, consecutive + 1
+            if consecutive >= MAX_CONSECUTIVE_FAILURES:
+                break
+            continue
+        consecutive = 0
         attempts.append(AttemptRecord(
             candidate_id=cand.candidate_id, candidate_name=cand.name, verification=verification))
         if verification.overall_status == "VERIFIED":
@@ -47,6 +61,8 @@ def decide(
         # REJECTED or UNVERIFIED -> try next ranked candidate
         continue
     if not attempts:
+        if failure is not None:
+            raise failure
         return None, None, attempts, "no_verified_match"
     # Human-in-the-loop fallback: nothing verified. Return the best
     # available candidate WITHOUT labeling it verified — prefer the
