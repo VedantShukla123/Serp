@@ -259,10 +259,25 @@ def test_duplicate_requirement_ids_cannot_share_a_verdict(monkeypatch: pytest.Mo
                                       Candidate(candidate_id="c", name="n"), s)
 
 
-def test_rest_verify_rejects_duplicate_requirement_ids() -> None:
+@pytest.mark.parametrize("accounts", [False, True], ids=["local", "accounts"])
+def test_rest_verify_rejects_duplicate_requirement_ids(accounts: bool, tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # Pinned settings: the result must not depend on the developer's local .env (e.g. a session secret).
     from fastapi.testclient import TestClient
 
+    from app import main as main_module
+    from app.api import routes
     from app.main import app
+    from app.storage import store
+    s = Settings(serpapi_api_key="", llm_api_key="", jev_api_key="", jev_endpoint="", db_path=str(tmp_path / "t.db"),
+                 production=accounts, session_secret="s" * 48 if accounts else "")
+    monkeypatch.setattr(routes, "settings", s)
+    monkeypatch.setattr(main_module, "settings", s)
+    store.init_db(s.db_path)
+    c = TestClient(app)
+    headers = {}
+    if accounts:
+        r = c.post("/v1/auth/register", json={"name": "a", "email": "a@example.com", "password": "a-long-password"})
+        headers = {"Authorization": f"Bearer {r.json()['token']}"}
     body = {"requirements": [{"id": "a", "description": "x"}, {"id": "a", "description": "y"}],
             "candidate": {"candidate_id": "c", "name": "n"}}
-    assert TestClient(app).post("/v1/verify", json=body).status_code == 422
+    assert c.post("/v1/verify", json=body, headers=headers).status_code == 422
